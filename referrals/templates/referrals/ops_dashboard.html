@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Ops Dashboard</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:800px;margin:40px auto;color:#222}
+table{width:100%;border-collapse:collapse;margin-top:16px}
+th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;font-size:14px}
+header{display:flex;justify-content:space-between;align-items:center}
+button{background:#2563eb;color:#fff;border:0;border-radius:4px;cursor:pointer;padding:8px}
+</style></head>
+<body>
+<header>
+  <h2>Ops Dashboard — Live Referral Codes</h2>
+  <form action="{% url 'logout' %}" method="post">{% csrf_token %}<button type="submit">Logout</button></form>
+</header>
+<table>
+<tr><th>Code</th><th>Type</th><th>Owner</th><th>Product</th><th>Discount</th><th>Approved By</th><th>Live Since</th></tr>
+{% for c in live_codes %}
+<tr>
+  <td>{{ c.code }}</td>
+  <td>{{ c.get_code_type_display }}</td>
+  <td>{{ c.owner_name }}</td>
+  <td>{{ c.get_product_display }}</td>
+  <td>{{ c.discount_percent }}%</td>
+  <td>{{ c.approved_by }}</td>
+  <td>{{ c.approved_at|date:"Y-m-d H:i" }}</td>
+</tr>
+{% empty %}
+<tr><td colspan="7">No live codes yet.</td></tr>
+{% endfor %}
+</table>
+</body>
+</html>

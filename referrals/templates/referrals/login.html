@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Login</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:360px;margin:80px auto;color:#222}
+input,button{width:100%;padding:10px;margin:6px 0;box-sizing:border-box}
+button{background:#2563eb;color:#fff;border:0;border-radius:4px;cursor:pointer}
+.err{color:#991b1b}
+</style></head>
+<body>
+<h2>Referral Portal Login</h2>
+{% if form.errors %}<p class="err">Invalid username or password.</p>{% endif %}
+<form method="post">
+  {% csrf_token %}
+  <input type="text" name="username" placeholder="Username" required>
+  <input type="password" name="password" placeholder="Password" required>
+  <button type="submit">Login</button>
+</form>
+</body>
+</html>

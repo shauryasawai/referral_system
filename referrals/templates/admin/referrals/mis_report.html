@@ -1,0 +1,12 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h1>MIS Report</h1>
+<h2>Weekly</h2>
+<table class="table"><tr><th>Week</th><th>Product</th><th>Total Referrals</th></tr>
+{% for row in weekly %}<tr><td>{{ row.period|date:"Y-m-d" }}</td><td>{{ row.product }}</td><td>{{ row.total }}</td></tr>{% endfor %}
+</table>
+<h2>Monthly</h2>
+<table class="table"><tr><th>Month</th><th>Product</th><th>Total Referrals</th></tr>
+{% for row in monthly %}<tr><td>{{ row.period|date:"Y-m" }}</td><td>{{ row.product }}</td><td>{{ row.total }}</td></tr>{% endfor %}
+</table>
+{% endblock %}
