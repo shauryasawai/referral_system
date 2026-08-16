@@ -9,8 +9,8 @@ from .models import ReferralCode, Referral
 
 @admin.register(ReferralCode)
 class ReferralCodeAdmin(admin.ModelAdmin):
-    list_display = ("code", "code_type", "requested_by", "product", "discount_percent", "approval_status", "approved_by", "created_at")
-    list_filter = ("code_type", "product", "approval_status")
+    list_display = ("code", "code_type", "requested_by", "product", "discount_percent", "approval_status", "active", "approved_by", "created_at")
+    list_filter = ("code_type", "product", "approval_status", "active")
     search_fields = ("code", "requested_by__username", "owner_name", "owner_email")
     date_hierarchy = "created_at"
     readonly_fields = ("requested_by", "approved_by", "approved_at")

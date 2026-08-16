@@ -45,13 +45,14 @@ class ReferralCode(models.Model):
     product = models.CharField(max_length=20, choices=PRODUCT_CHOICES)
     discount_percent = models.PositiveIntegerField(default=DEFAULT_CUSTOMER_DISCOUNT)
     approval_status = models.CharField(max_length=10, choices=APPROVAL_STATUS_CHOICES, default="pending")
+    active = models.BooleanField(default=True, help_text="Live codes can be deactivated without changing their approval history.")
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_codes")
     approved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     @property
-    def is_active(self):
-        return self.approval_status == "approved"
+    def is_live(self):
+        return self.approval_status == "approved" and self.active
 
     def save(self, *args, **kwargs):
         if not self.code:

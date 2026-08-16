@@ -1,24 +1,25 @@
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Edit Referral Code</title>
-<style>
-body{font-family:Arial,sans-serif;max-width:420px;margin:60px auto;color:#222}
-input,button{width:100%;padding:10px;margin:6px 0;box-sizing:border-box}
-button{background:#2563eb;color:#fff;border:0;border-radius:4px;cursor:pointer}
-.err{color:#991b1b}
-</style></head>
-<body>
-<h2>Edit Referral Code</h2>
-{% if messages %}{% for m in messages %}<p class="err">{{ m }}</p>{% endfor %}{% endif %}
-<form method="post">
-  {% csrf_token %}
-  <label>Code</label>
-  <input type="text" name="code" value="{{ code.code }}" {% if not request.user.is_staff %}readonly{% endif %}>
-  <label>Discount %</label>
-  <input type="number" name="discount_percent" value="{{ code.discount_percent }}" min="0" max="100">
-  <p style="font-size:13px;color:#555">Status: {{ code.get_approval_status_display }} &middot; Product: {{ code.get_product_display }}</p>
-  <button type="submit">Save</button>
-</form>
-<p><a href="{% url 'user_dashboard' %}">Back to dashboard</a></p>
-</body>
-</html>
+{% extends "referrals/base.html" %}
+{% block title %}Edit Code — Referral Hub{% endblock %}
+{% block body %}
+<div class="page-narrow">
+  <div class="card">
+    <div class="card-head">
+      <h2>Edit referral code</h2>
+      <p class="subtext">{{ code.get_product_display }} &middot; <span class="badge badge-{{ code.approval_status }}">{{ code.get_approval_status_display }}</span></p>
+    </div>
+    {% if messages %}{% for m in messages %}<div class="alert alert-error">{{ m }}</div>{% endfor %}{% endif %}
+    <form method="post">
+      {% csrf_token %}
+      <label for="id_code">Code</label>
+      <input type="text" name="code" id="id_code" value="{{ code.code }}" {% if not request.user.is_staff %}readonly style="background:var(--surface-alt);color:var(--ink-muted)"{% endif %}>
+      {% if not request.user.is_staff %}<p class="subtext" style="margin-top:2px">Only an admin can change the code itself.</p>{% endif %}
+      <label for="id_discount">Discount %</label>
+      <input type="number" name="discount_percent" id="id_discount" value="{{ code.discount_percent }}" min="0" max="100">
+      <div class="btn-row" style="margin-top:20px">
+        <button type="submit">Save changes</button>
+        <a href="{% url 'user_dashboard' %}" class="btn-ghost btn">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

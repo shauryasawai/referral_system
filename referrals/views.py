@@ -1,5 +1,7 @@
 from django.contrib import messages
+from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.forms import PasswordChangeForm
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
@@ -33,7 +35,7 @@ def user_dashboard(request):
     my_codes = ReferralCode.objects.filter(requested_by=request.user).order_by("-created_at")
     context = {"products": PRODUCT_CHOICES, "my_codes": my_codes, "is_ops": _in_group(request.user, "Ops")}
     if request.user.is_staff:
-        context["pending_for_approval"] = ReferralCode.objects.filter(approval_status="pending").order_by("created_at")
+        context["all_codes_admin"] = ReferralCode.objects.all().order_by("-created_at")
     return render(request, "referrals/dashboard.html", context)
 
 
@@ -86,16 +88,55 @@ def edit_code(request, code_id):
         messages.success(request, "Code updated.")
         return redirect("user_dashboard")
 
-    return render(request, "referrals/edit_code.html", {"code": code})
+    return render(request, "referrals/edit_code.html", {"code": code, "is_ops": _in_group(request.user, "Ops")})
+
+
+@login_required
+def toggle_active(request, code_id):
+    """Deactivate/reactivate a live code. Owner (their own) or staff (any) can do this."""
+    code = get_object_or_404(ReferralCode, id=code_id, approval_status="approved")
+    if not (request.user.is_staff or code.requested_by_id == request.user.id):
+        raise PermissionDenied("You cannot modify this code.")
+    code.active = not code.active
+    code.save()
+    messages.success(request, f"{code.code} {'reactivated' if code.active else 'deactivated'}.")
+    return redirect("user_dashboard")
+
+
+@login_required
+@require_http_methods(["POST"])
+def delete_code(request, code_id):
+    """Permanently remove a code and its history. Admin only, irreversible."""
+    if not request.user.is_staff:
+        raise PermissionDenied("Admin access only.")
+    code = get_object_or_404(ReferralCode, id=code_id)
+    code_str = code.code
+    code.delete()
+    messages.success(request, f"{code_str} permanently deleted.")
+    return redirect("user_dashboard")
+
+
+@login_required
+def change_password(request):
+    if request.method == "POST":
+        form = PasswordChangeForm(request.user, request.POST)
+        if form.is_valid():
+            user = form.save()
+            update_session_auth_hash(request, user)
+            messages.success(request, "Password updated successfully.")
+            return redirect("user_dashboard")
+    else:
+        form = PasswordChangeForm(request.user)
+    return render(request, "referrals/change_password.html", {"form": form})
 
 
 @login_required
 def ops_dashboard(request):
-    """Ops team: read-only view of approved (live) codes only."""
+    """Ops team: read-only view of approved AND active (currently usable) codes."""
     if not _in_group(request.user, "Ops"):
         raise PermissionDenied("Ops access only.")
-    live_codes = ReferralCode.objects.filter(approval_status="approved").order_by("-approved_at")
-    return render(request, "referrals/ops_dashboard.html", {"live_codes": live_codes})
+    live_codes = ReferralCode.objects.filter(approval_status="approved").order_by("-active", "-approved_at")
+    return render(request, "referrals/ops_dashboard.html", {"live_codes": live_codes, "is_ops": True})
 
 
 def apply_code_page(request):
@@ -109,7 +150,7 @@ def apply_referral_code(request):
     email = request.POST.get("email", "").strip()
     product = request.POST.get("product")
     try:
-        ref = ReferralCode.objects.get(code=code, approval_status="approved")
+        ref = ReferralCode.objects.get(code=code, approval_status="approved", active=True)
     except ReferralCode.DoesNotExist:
         return JsonResponse({"error": "Invalid, unapproved or inactive referral code"}, status=404)
     if ref.product != product:

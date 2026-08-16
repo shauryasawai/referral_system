@@ -1,42 +1,46 @@
-<!DOCTYPE html>
-<html>
+{% load static %}<!DOCTYPE html>
+<html lang="en">
 <head>
-<meta charset="utf-8"><title>Apply Referral Code</title>
-<style>
-body{font-family:Arial,sans-serif;max-width:420px;margin:60px auto;color:#222}
-input,select,button{width:100%;padding:10px;margin:6px 0;box-sizing:border-box}
-button{background:#059669;color:#fff;border:0;border-radius:4px;cursor:pointer}
-#result{margin-top:16px;padding:12px;border-radius:4px}
-.ok{background:#e6f4ea;color:#166534}
-.err{background:#fde8e8;color:#991b1b}
-</style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Apply Referral Code — Referral Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{% static 'referrals/css/main.css' %}">
 </head>
 <body>
-<h2>Apply Referral Code</h2>
-<form id="f">
-  <input name="name" placeholder="Your name" required>
-  <input name="email" type="email" placeholder="Your email" required>
-  <select name="product" required>
-    <option value="">Select product</option>
-    {% for value, label in products %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-  </select>
-  <input name="code" placeholder="Referral code" required>
-  <button type="submit">Apply Code</button>
-</form>
-<div id="result"></div>
+<div class="page-narrow">
+  <div class="brand" style="justify-content:center;margin-bottom:24px"><span class="brand-mark">R</span> Referral Hub</div>
+  <div class="card">
+    <div class="card-head">
+      <h2>Apply a referral code</h2>
+      <p class="subtext">Enter your details and referral code to unlock your discount.</p>
+    </div>
+    <form id="f">
+      <label for="id_name">Your name</label>
+      <input type="text" id="id_name" name="name" required>
+      <label for="id_email">Your email</label>
+      <input type="email" id="id_email" name="email" required>
+      <label for="id_product">Product</label>
+      <select id="id_product" name="product" required>
+        <option value="">Select product</option>
+        {% for value, label in products %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </select>
+      <label for="id_code">Referral code</label>
+      <input type="text" id="id_code" name="code" placeholder="e.g. PTR-AB12CD" required>
+      <button type="submit" style="width:100%;margin-top:20px">Apply code</button>
+    </form>
+    <div id="result"></div>
+  </div>
+</div>
 <script>
 document.getElementById('f').addEventListener('submit', async function(e){
   e.preventDefault();
   const res = await fetch("{% url 'apply_referral_code' %}", {method:"POST", body:new FormData(e.target)});
   const data = await res.json();
   const box = document.getElementById('result');
-  if(res.ok){
-    box.className='ok';
-    box.textContent = `${data.message} — ${data.discount_percent}% discount applied`;
-  } else {
-    box.className='err';
-    box.textContent = data.error;
-  }
+  box.className = 'show ' + (res.ok ? 'ok' : 'err');
+  box.textContent = res.ok ? `${data.message} — ${data.discount_percent}% discount applied` : data.error;
 });
 </script>
 </body>

@@ -1,76 +1,77 @@
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>My Referral Dashboard</title>
-<style>
-body{font-family:Arial,sans-serif;max-width:700px;margin:40px auto;color:#222}
-select,button{padding:8px;margin:6px 4px 6px 0}
-button{background:#2563eb;color:#fff;border:0;border-radius:4px;cursor:pointer}
-table{width:100%;border-collapse:collapse;margin-top:20px}
-th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;font-size:14px}
-.pending{color:#92400e}.approved{color:#166534}.rejected{color:#991b1b}
-header{display:flex;justify-content:space-between;align-items:center}
-</style></head>
-<body>
-<header>
-  <h2>Welcome, {{ request.user.username }}</h2>
-  <div>
-    {% if is_ops %}<a href="{% url 'ops_dashboard' %}" style="margin-right:16px">Ops Dashboard →</a>{% endif %}
-    {% if request.user.is_staff %}<a href="/admin/referrals/referralcode/" style="margin-right:16px">Admin Panel →</a>{% endif %}
-    <form action="{% url 'logout' %}" method="post" style="display:inline">{% csrf_token %}<button type="submit">Logout</button></form>
+{% extends "referrals/base.html" %}
+{% block title %}My Dashboard — Referral Hub{% endblock %}
+{% block body %}
+<div class="page">
+
+  <h1>Welcome back, {{ request.user.username }}</h1>
+  <p class="subtext" style="margin-bottom:24px">Request referral codes and track their approval status.</p>
+
+  {% if messages %}{% for m in messages %}<div class="alert alert-success">{{ m }}</div>{% endfor %}{% endif %}
+
+  <div class="card">
+    <div class="card-head">
+      <h3>Request a new code</h3>
+    </div>
+    <form method="post" class="toolbar">
+      {% csrf_token %}
+      <select name="product" required>
+        <option value="">Select product</option>
+        {% for value, label in products %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </select>
+      <button type="submit">Request code</button>
+    </form>
+    <p class="subtext">Your code is generated instantly but stays <strong>pending</strong> until an admin approves it. Once approved, it goes live and is usable at checkout.</p>
   </div>
-</header>
 
-{% if messages %}
-  {% for m in messages %}<p style="color:#166534">{{ m }}</p>{% endfor %}
-{% endif %}
-
-<h3>Request a New Referral Code</h3>
-<form method="post">
-  {% csrf_token %}
-  <select name="product" required>
-    <option value="">Select product</option>
-    {% for value, label in products %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-  </select>
-  <button type="submit">Request Code</button>
-</form>
-<p style="font-size:13px;color:#555">Your code will be generated instantly but stays <b>pending</b> until an admin approves it. Once approved it goes live and is usable at checkout.</p>
-
-{% if request.user.is_staff and pending_for_approval %}
-<h3>Pending Approvals (Admin)</h3>
-<table>
-<tr><th>Code</th><th>Requested By</th><th>Product</th><th>Discount</th><th>Requested</th><th>Action</th></tr>
-{% for c in pending_for_approval %}
-<tr>
-  <td>{{ c.code }}</td>
-  <td>{{ c.requested_by }}</td>
-  <td>{{ c.get_product_display }}</td>
-  <td>{{ c.discount_percent }}%</td>
-  <td>{{ c.created_at|date:"Y-m-d H:i" }}</td>
-  <td>
-    <form action="{% url 'approve_code' c.id %}" method="post" style="display:inline">{% csrf_token %}<button type="submit" style="background:#059669">Approve</button></form>
-    <form action="{% url 'reject_code' c.id %}" method="post" style="display:inline">{% csrf_token %}<button type="submit" style="background:#991b1b">Reject</button></form>
-    <a href="{% url 'edit_code' c.id %}">Edit</a>
-  </td>
-</tr>
-{% endfor %}
-</table>
-{% endif %}
-
-<h3>My Requests</h3>
-<table>
-<tr><th>Code</th><th>Product</th><th>Discount</th><th>Status</th><th>Requested</th><th></th></tr>
-{% for c in my_codes %}
-<tr>
-  <td>{{ c.code }}</td>
-  <td>{{ c.get_product_display }}</td>
-  <td>{{ c.discount_percent }}%</td>
-  <td class="{{ c.approval_status }}">{{ c.get_approval_status_display }}</td>
-  <td>{{ c.created_at|date:"Y-m-d H:i" }}</td>
-  <td>{% if c.approval_status == "pending" or request.user.is_staff %}<a href="{% url 'edit_code' c.id %}">Edit</a>{% endif %}</td>
-</tr>
-{% empty %}
-<tr><td colspan="6">No requests yet.</td></tr>
-{% endfor %}
-</table>
-</body>
-</html>
+  {% if request.user.is_staff and all_codes_admin %}
+  <div class="card">
+    <div class="card-head"><h3>All coupons (admin)</h3></div>
+    <div class="table-wrap">
+    <table>
+    <tr><th>Code</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Status</th><th>Requested</th><th>Action</th></tr>
+    {% for c in all_codes_admin %}
+    <tr>
+      <td>
+        <div class="code-cell">
+          <span class="code-chip">{{ c.code }}</span>
+          <button type="button" class="copy-btn" data-code="{{ c.code }}" onclick="copyCode(this)">Copy</button>
+        </div>
+      </td>
+      <td>{{ c.requested_by }}</td>
+      <td>{{ c.get_product_display }}</td>
+      <td>{{ c.discount_percent }}%</td>
+      <td>
+        {% if c.approval_status == "approved" and not c.active %}
+          <span class="badge badge-rejected">● Deactivated</span>
+        {% else %}
+          <span class="badge badge-{{ c.approval_status }}">{{ c.get_approval_status_display }}</span>
+        {% endif %}
+      </td>
+      <td>{{ c.created_at|date:"M d, H:i" }}</td>
+      <td>
+        <div class="btn-row">
+          {% if c.approval_status == "pending" %}
+            <form action="{% url 'approve_code' c.id %}" method="post" class="inline-form">{% csrf_token %}<button type="submit" class="btn-approve">Approve</button></form>
+            <form action="{% url 'reject_code' c.id %}" method="post" class="inline-form">{% csrf_token %}<button type="submit" class="btn-reject">Reject</button></form>
+          {% elif c.approval_status == "approved" %}
+            <form action="{% url 'toggle_active' c.id %}" method="post" class="inline-form">
+              {% csrf_token %}
+              {% if c.active %}
+                <button type="submit" class="btn-warn" style="padding:5px 10px;font-size:12px">Deactivate</button>
+              {% else %}
+                <button type="submit" class="btn-approve" style="padding:5px 10px;font-size:12px">Reactivate</button>
+              {% endif %}
+            </form>
+          {% endif %}
+          <a href="{% url 'edit_code' c.id %}">Edit</a>
+          <form action="{% url 'delete_code' c.id %}" method="post" class="inline-form" onsubmit="return confirm('Permanently delete {{ c.code }}? This cannot be undone.');">{% csrf_token %}<button type="submit" class="btn-ghost" style="padding:5px 10px;font-size:12px">Delete</button></form>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+    </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
