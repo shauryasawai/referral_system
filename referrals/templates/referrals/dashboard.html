@@ -1,31 +1,96 @@
 {% extends "referrals/base.html" %}
-{% block title %}My Dashboard — Referral Hub{% endblock %}
+{% block title %}Dashboard — Referral Hub{% endblock %}
 {% block body %}
 <div class="page">
 
-  <h1>Welcome back, {{ request.user.username }}</h1>
-  <p class="subtext" style="margin-bottom:24px">Request referral codes and track their approval status.</p>
+  <h1>Welcome back, {{ request.user.username }}
+    {% if request.user.is_staff %}<span class="role-badge">Admin</span>
+    {% elif is_ops %}<span class="role-badge">Ops</span>
+    {% elif is_partner %}<span class="role-badge">Channel Partner</span>
+    {% else %}<span class="role-badge">Customer</span>
+    {% endif %}
+  </h1>
+  <p class="subtext" style="margin-bottom:24px">Request referral codes and track their status here.</p>
 
   {% if messages %}{% for m in messages %}<div class="alert alert-success">{{ m }}</div>{% endfor %}{% endif %}
+
+  <h3>My activity</h3>
+  <div class="stat-grid">
+    <div class="stat-card accent-total"><div class="stat-value">{{ my_counts.total }}</div><div class="stat-label">Total Requested</div></div>
+    <div class="stat-card accent-pending"><div class="stat-value">{{ my_counts.pending }}</div><div class="stat-label">Pending</div></div>
+    <div class="stat-card accent-live"><div class="stat-value">{{ my_counts.live }}</div><div class="stat-label">Live</div></div>
+    <div class="stat-card accent-deactivated"><div class="stat-value">{{ my_counts.deactivated }}</div><div class="stat-label">Deactivated</div></div>
+  </div>
 
   <div class="card">
     <div class="card-head">
       <h3>Request a new code</h3>
     </div>
-    <form method="post" class="toolbar">
-      {% csrf_token %}
-      <select name="product" required>
-        <option value="">Select product</option>
-        {% for value, label in products %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-      </select>
-      <button type="submit">Request code</button>
-    </form>
-    <p class="subtext">Your code is generated instantly but stays <strong>pending</strong> until an admin approves it. Once approved, it goes live and is usable at checkout.</p>
+    {% if has_no_products %}
+      <div class="alert alert-error">You don't have access to generate codes for any product yet. Contact an admin to set up your product access.</div>
+    {% else %}
+      <form method="post" class="toolbar">
+        {% csrf_token %}
+        {{ form.product }}
+        <button type="submit">Request code</button>
+      </form>
+      {% if form.product.errors %}<div class="alert alert-error" style="margin-top:10px">{{ form.product.errors.0 }}</div>{% endif %}
+      <p class="subtext">Your code is generated instantly but stays <strong>pending</strong> until an admin approves it. Once approved, it goes live and is usable at checkout. Deactivation is permanent — if a code is deactivated, request a new one here.</p>
+    {% endif %}
   </div>
 
-  {% if request.user.is_staff and all_codes_admin %}
   <div class="card">
-    <div class="card-head"><h3>All coupons (admin)</h3></div>
+    <div class="card-head"><h3>My requests</h3></div>
+    <div class="table-wrap">
+    <table>
+    <tr><th>Code</th><th>Product</th><th>Discount</th><th>Status</th><th>Requested</th><th></th></tr>
+    {% for c in my_codes %}
+    <tr>
+      <td>
+        <div class="code-cell">
+          <span class="code-chip">{{ c.code }}</span>
+          <button type="button" class="copy-btn" data-code="{{ c.code }}" onclick="copyCode(this)">Copy</button>
+        </div>
+      </td>
+      <td>{{ c.get_product_display }}</td>
+      <td>{{ c.discount_percent }}%</td>
+      <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
+      <td>{{ c.created_at|date:"M d, H:i" }}</td>
+      <td>
+        <div class="btn-row">
+          {% if c.approval_status == "pending" %}
+            <a href="{% url 'edit_code' c.id %}">Edit</a>
+          {% endif %}
+          {% if c.approval_status == "approved" and c.active %}
+            <form action="{% url 'deactivate_code' c.id %}" method="post" class="inline-form" onsubmit="return confirm('Deactivate {{ c.code }} permanently? This cannot be undone — you would need to request a new code.');">
+              {% csrf_token %}
+              <button type="submit" class="btn-warn" style="padding:5px 10px;font-size:12px">Deactivate</button>
+            </form>
+          {% endif %}
+        </div>
+      </td>
+    </tr>
+    {% empty %}
+    <tr class="empty-row"><td colspan="6">No requests yet — request your first code above.</td></tr>
+    {% endfor %}
+    </table>
+    </div>
+  </div>
+
+  {% if request.user.is_staff %}
+  <div class="section-gap">
+    <h3>Admin console</h3>
+  </div>
+  <div class="stat-grid">
+    <div class="stat-card accent-total"><div class="stat-value">{{ admin_counts.total }}</div><div class="stat-label">All Codes</div></div>
+    <div class="stat-card accent-pending"><div class="stat-value">{{ admin_counts.pending }}</div><div class="stat-label">Awaiting Approval</div></div>
+    <div class="stat-card accent-live"><div class="stat-value">{{ admin_counts.live }}</div><div class="stat-label">Live</div></div>
+    <div class="stat-card accent-deactivated"><div class="stat-value">{{ admin_counts.deactivated }}</div><div class="stat-label">Deactivated</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h3>All coupons</h3></div>
+    <div class="panel-note">Every code from every user. Admin can approve, reject, edit, deactivate or permanently delete any code here.</div>
     <div class="table-wrap">
     <table>
     <tr><th>Code</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Status</th><th>Requested</th><th>Action</th></tr>
@@ -40,30 +105,21 @@
       <td>{{ c.requested_by }}</td>
       <td>{{ c.get_product_display }}</td>
       <td>{{ c.discount_percent }}%</td>
-      <td>
-        {% if c.approval_status == "approved" and not c.active %}
-          <span class="badge badge-rejected">● Deactivated</span>
-        {% else %}
-          <span class="badge badge-{{ c.approval_status }}">{{ c.get_approval_status_display }}</span>
-        {% endif %}
-      </td>
+      <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
       <td>{{ c.created_at|date:"M d, H:i" }}</td>
       <td>
         <div class="btn-row">
           {% if c.approval_status == "pending" %}
             <form action="{% url 'approve_code' c.id %}" method="post" class="inline-form">{% csrf_token %}<button type="submit" class="btn-approve">Approve</button></form>
             <form action="{% url 'reject_code' c.id %}" method="post" class="inline-form">{% csrf_token %}<button type="submit" class="btn-reject">Reject</button></form>
-          {% elif c.approval_status == "approved" %}
-            <form action="{% url 'toggle_active' c.id %}" method="post" class="inline-form">
+            <a href="{% url 'edit_code' c.id %}">Edit</a>
+          {% elif c.approval_status == "approved" and c.active %}
+            <a href="{% url 'edit_code' c.id %}">Edit</a>
+            <form action="{% url 'deactivate_code' c.id %}" method="post" class="inline-form" onsubmit="return confirm('Deactivate {{ c.code }} permanently?');">
               {% csrf_token %}
-              {% if c.active %}
-                <button type="submit" class="btn-warn" style="padding:5px 10px;font-size:12px">Deactivate</button>
-              {% else %}
-                <button type="submit" class="btn-approve" style="padding:5px 10px;font-size:12px">Reactivate</button>
-              {% endif %}
+              <button type="submit" class="btn-warn" style="padding:5px 10px;font-size:12px">Deactivate</button>
             </form>
           {% endif %}
-          <a href="{% url 'edit_code' c.id %}">Edit</a>
           <form action="{% url 'delete_code' c.id %}" method="post" class="inline-form" onsubmit="return confirm('Permanently delete {{ c.code }}? This cannot be undone.');">{% csrf_token %}<button type="submit" class="btn-ghost" style="padding:5px 10px;font-size:12px">Delete</button></form>
         </div>
       </td>
@@ -73,5 +129,6 @@
     </div>
   </div>
   {% endif %}
+
 </div>
 {% endblock %}

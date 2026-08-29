@@ -15,9 +15,10 @@
   <div class="nav-inner">
     <div class="brand"><span class="brand-mark">R</span> Referral Hub</div>
     <div class="nav-links">
-      <a href="{% url 'user_dashboard' %}">My Dashboard</a>
+      {% if not is_ops or request.user.is_staff %}<a href="{% url 'user_dashboard' %}">Dashboard</a>{% endif %}
       {% if is_ops or request.user.is_staff %}<a href="{% url 'ops_dashboard' %}">Ops Dashboard</a>{% endif %}
-      {% if request.user.is_staff %}<a href="/admin/referrals/referralcode/">Admin Panel</a>{% endif %}
+      {% if request.user.is_staff %}<a href="{% url 'manage_users' %}">Manage Users</a>{% endif %}
+      {% if request.user.is_staff %}<a href="{% url 'audit_log' %}">Audit Log</a>{% endif %}
       <span class="nav-user">{{ request.user.username }}</span>
       <a href="{% url 'change_password' %}">Password</a>
       <form action="{% url 'logout' %}" method="post" class="inline-form">{% csrf_token %}<button type="submit" class="btn-ghost">Logout</button></form>

@@ -1,0 +1,33 @@
+{% extends "referrals/base.html" %}
+{% block title %}Audit Log — Referral Hub{% endblock %}
+{% block body %}
+<div class="page">
+  <h1>Audit log <span class="role-badge">Admin</span></h1>
+  <p class="subtext" style="margin-bottom:24px">Every operation on every code, in order, for dispute investigation. This record cannot be edited or deleted by anyone.</p>
+
+  <form method="get" class="search-box toolbar">
+    <input type="text" name="q" placeholder="Search by code or username" value="{{ q }}">
+    <button type="submit">Search</button>
+  </form>
+
+  <div class="card">
+    <div class="table-wrap">
+    <table>
+    <tr><th>Time</th><th>Code</th><th>Action</th><th>Performed by</th><th>Details</th></tr>
+    {% for e in entries %}
+    <tr>
+      <td>{{ e.timestamp|date:"M d, Y H:i:s" }}</td>
+      <td><span class="code-chip">{{ e.code_snapshot }}</span></td>
+      <td>{{ e.get_action_display }}</td>
+      <td>{{ e.actor|default:"System / Public checkout" }}</td>
+      <td>{{ e.details|default:"—" }}</td>
+    </tr>
+    {% empty %}
+    <tr class="empty-row"><td colspan="5">No audit entries match your search.</td></tr>
+    {% endfor %}
+    </table>
+    </div>
+  </div>
+  <p class="subtext">Showing the most recent 300 entries{% if q %} matching "{{ q }}"{% endif %}.</p>
+</div>
+{% endblock %}

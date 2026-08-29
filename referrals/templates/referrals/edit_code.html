@@ -5,16 +5,18 @@
   <div class="card">
     <div class="card-head">
       <h2>Edit referral code</h2>
-      <p class="subtext">{{ code.get_product_display }} &middot; <span class="badge badge-{{ code.approval_status }}">{{ code.get_approval_status_display }}</span></p>
+      <p class="subtext">{{ code.get_product_display }} &middot; <span class="badge badge-{{ code.display_status }}">{{ code.display_status_label }}</span></p>
     </div>
-    {% if messages %}{% for m in messages %}<div class="alert alert-error">{{ m }}</div>{% endfor %}{% endif %}
+    {% if form.errors %}
+      {% for field in form %}{% for error in field.errors %}<div class="alert alert-error">{{ error }}</div>{% endfor %}{% endfor %}
+    {% endif %}
     <form method="post">
       {% csrf_token %}
       <label for="id_code">Code</label>
-      <input type="text" name="code" id="id_code" value="{{ code.code }}" {% if not request.user.is_staff %}readonly style="background:var(--surface-alt);color:var(--ink-muted)"{% endif %}>
+      {{ form.code }}
       {% if not request.user.is_staff %}<p class="subtext" style="margin-top:2px">Only an admin can change the code itself.</p>{% endif %}
-      <label for="id_discount">Discount %</label>
-      <input type="number" name="discount_percent" id="id_discount" value="{{ code.discount_percent }}" min="0" max="100">
+      <label for="id_discount_percent">Discount %</label>
+      {{ form.discount_percent }}
       <div class="btn-row" style="margin-top:20px">
         <button type="submit">Save changes</button>
         <a href="{% url 'user_dashboard' %}" class="btn-ghost btn">Cancel</a>

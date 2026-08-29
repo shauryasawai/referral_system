@@ -1,0 +1,59 @@
+{% extends "referrals/base.html" %}
+{% block title %}Manage Users — Referral Hub{% endblock %}
+{% block body %}
+<div class="page">
+  <h1>Manage users <span class="role-badge">Admin</span></h1>
+  <p class="subtext" style="margin-bottom:24px">Create accounts, set their designation, and choose which products each Channel Partner or Customer can generate referral codes for.</p>
+
+  {% if messages %}{% for m in messages %}<div class="alert alert-success">{{ m }}</div>{% endfor %}{% endif %}
+
+  <div class="card">
+    <div class="card-head"><h3>Add a new user</h3></div>
+    <form method="post">
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div class="alert alert-error">{{ form.non_field_errors.0 }}</div>{% endif %}
+
+      <label for="id_username">Username</label>
+      {{ form.username }}
+      {% if form.username.errors %}<div class="alert alert-error">{{ form.username.errors.0 }}</div>{% endif %}
+
+      <label for="id_email">Email (optional)</label>
+      {{ form.email }}
+
+      <label for="id_password">Password</label>
+      {{ form.password }}
+      {% if form.password.errors %}<div class="alert alert-error">{{ form.password.errors.0 }}</div>{% endif %}
+
+      <label for="id_designation">Designation</label>
+      {{ form.designation }}
+
+      <label>Allowed products <span class="subtext" style="display:inline">(only applies to Channel Partner / End Customer)</span></label>
+      <div class="btn-row" style="margin-top:6px">
+        {{ form.allowed_products }}
+      </div>
+      {% if form.allowed_products.errors %}<div class="alert alert-error">{{ form.allowed_products.errors.0 }}</div>{% endif %}
+
+      <button type="submit" style="margin-top:20px">Create user</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h3>Existing users</h3></div>
+    <div class="table-wrap">
+    <table>
+    <tr><th>Username</th><th>Email</th><th>Designation</th><th>Product access</th></tr>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.user.username }}</td>
+      <td>{{ row.user.email|default:"—" }}</td>
+      <td><span class="role-badge">{{ row.role }}</span></td>
+      <td>{{ row.products }}</td>
+    </tr>
+    {% empty %}
+    <tr class="empty-row"><td colspan="4">No other users yet.</td></tr>
+    {% endfor %}
+    </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

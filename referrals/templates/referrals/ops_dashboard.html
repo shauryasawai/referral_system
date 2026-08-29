@@ -2,13 +2,18 @@
 {% block title %}Ops Dashboard — Referral Hub{% endblock %}
 {% block body %}
 <div class="page">
-  <h1>Ops dashboard</h1>
-  <p class="subtext" style="margin-bottom:24px">Admin-approved referral codes. Deactivated ones are no longer usable at checkout but stay visible here for reference.</p>
+  <h1>Ops dashboard <span class="role-badge">Ops</span></h1>
+  <p class="subtext" style="margin-bottom:24px">Admin-approved referral codes, for day-to-day reference. Read-only — deactivated codes stay listed here permanently for the record.</p>
+
+  <div class="stat-grid">
+    <div class="stat-card accent-live"><div class="stat-value">{{ ops_counts.live }}</div><div class="stat-label">Currently Live</div></div>
+    <div class="stat-card accent-deactivated"><div class="stat-value">{{ ops_counts.deactivated }}</div><div class="stat-label">Deactivated</div></div>
+  </div>
 
   <div class="card">
     <div class="table-wrap">
     <table>
-    <tr><th>Code</th><th>Type</th><th>Owner</th><th>Product</th><th>Discount</th><th>Status</th><th>Approved by</th><th>Live since</th></tr>
+    <tr><th>Code</th><th>Type</th><th>Owner</th><th>Product</th><th>Discount</th><th>Status</th><th>Approved by</th><th>Approved</th></tr>
     {% for c in live_codes %}
     <tr>
       <td>
@@ -21,13 +26,7 @@
       <td>{{ c.owner_name }}</td>
       <td>{{ c.get_product_display }}</td>
       <td>{{ c.discount_percent }}%</td>
-      <td>
-        {% if c.active %}
-          <span class="badge badge-approved">Live</span>
-        {% else %}
-          <span class="badge badge-rejected">Deactivated</span>
-        {% endif %}
-      </td>
+      <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
       <td>{{ c.approved_by }}</td>
       <td>{{ c.approved_at|date:"M d, H:i" }}</td>
     </tr>

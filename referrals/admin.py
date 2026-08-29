@@ -4,7 +4,7 @@ from django.db.models import Count
 from django.template.response import TemplateResponse
 from django.urls import path
 from django.utils import timezone
-from .models import ReferralCode, Referral
+from .models import AuditLog, ReferralCode, Referral, UserAccess
 
 
 @admin.register(ReferralCode)
@@ -13,8 +13,8 @@ class ReferralCodeAdmin(admin.ModelAdmin):
     list_filter = ("code_type", "product", "approval_status", "active")
     search_fields = ("code", "requested_by__username", "owner_name", "owner_email")
     date_hierarchy = "created_at"
-    readonly_fields = ("requested_by", "approved_by", "approved_at")
-    actions = ["approve_codes", "reject_codes"]
+    readonly_fields = ("requested_by", "approved_by", "approved_at", "deactivated_by", "deactivated_at")
+    actions = ["approve_codes", "reject_codes", "deactivate_codes"]
 
     @admin.action(description="Approve selected codes (goes live on Ops dashboard)")
     def approve_codes(self, request, queryset):
@@ -29,6 +29,13 @@ class ReferralCodeAdmin(admin.ModelAdmin):
             approval_status="rejected", approved_by=request.user, approved_at=timezone.now()
         )
         self.message_user(request, f"{updated} code(s) rejected.")
+
+    @admin.action(description="Deactivate selected codes (permanent, cannot be undone)")
+    def deactivate_codes(self, request, queryset):
+        updated = queryset.filter(approval_status="approved", active=True).update(
+            active=False, deactivated_by=request.user, deactivated_at=timezone.now()
+        )
+        self.message_user(request, f"{updated} code(s) deactivated permanently.")
 
 
 @admin.register(Referral)
@@ -46,3 +53,28 @@ class ReferralAdmin(admin.ModelAdmin):
         monthly = Referral.objects.annotate(period=TruncMonth("created_at")).values("period", "product").annotate(total=Count("id")).order_by("-period")
         context = dict(self.admin_site.each_context(request), weekly=weekly, monthly=monthly, title="MIS Report")
         return TemplateResponse(request, "admin/referrals/mis_report.html", context)
+
+
+@admin.register(AuditLog)
+class AuditLogAdmin(admin.ModelAdmin):
+    """Read-only in Django admin too: audit records must not be editable or deletable by anyone,
+    including admins, to keep them trustworthy for dispute investigation."""
+    list_display = ("timestamp", "code_snapshot", "action", "actor", "details")
+    list_filter = ("action",)
+    search_fields = ("code_snapshot", "actor__username", "details")
+    date_hierarchy = "timestamp"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(UserAccess)
+class UserAccessAdmin(admin.ModelAdmin):
+    list_display = ("user", "allowed_products")
+    search_fields = ("user__username",)
