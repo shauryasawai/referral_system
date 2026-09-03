@@ -26,7 +26,7 @@ SECRET_KEY = 'django-insecure-kczjknk=b(u&st5kd!yplnnl^jd6$w3)-bj%-e+aa)hcm&1ajp
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
@@ -132,7 +132,7 @@ MAILERS = {
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "user_dashboard"
 LOGOUT_REDIRECT_URL = "login"
-
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 import os
 from dotenv import load_dotenv
 
@@ -140,3 +140,5 @@ load_dotenv()
 
 WIX_API_KEY = os.getenv("WIX_API_KEY")
 WIX_SITE_ID = os.getenv("WIX_SITE_ID")
+LEADGEN_BASE_URL= os.getenv("LEADGEN_BASE_URL","http://127.0.0.1:8000/")
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")

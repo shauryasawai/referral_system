@@ -10,10 +10,13 @@ from django.http import JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
-
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+from django.conf import settings
+import json
 from . import wix_sync
 from .forms import AddUserForm, ApplyCodeForm, EditCodeForm, RequestCodeForm
-from .models import AuditLog, DEFAULT_CUSTOMER_DISCOUNT, PRODUCT_CHOICES, Referral, ReferralCode, UserAccess
+from .models import AuditLog, DEFAULT_CUSTOMER_DISCOUNT, PRODUCT_CHOICES, PartnerOnboardingRequest, Referral, ReferralCode, UserAccess
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +147,15 @@ def user_dashboard(request):
         all_codes = ReferralCode.objects.select_related("requested_by", "approved_by")
         context["all_codes_admin"] = all_codes
         context["admin_counts"] = _code_counts(all_codes)
+        partner_requests = PartnerOnboardingRequest.objects.filter(status="pending").order_by("created_at")
+        context["partner_requests"] = partner_requests
+        context["partner_request_count"] = partner_requests.count()
+        context["product_choices"] = PRODUCT_CHOICES
+        context["failed_deliveries"] = PartnerOnboardingRequest.objects.filter(
+            status="approved",
+            callback_delivered=False,
+            referral_code__isnull=False,
+        ).select_related("referral_code").order_by("-referral_code__approved_at")
 
     return render(request, "referrals/dashboard.html", context)
 
@@ -428,3 +440,127 @@ def apply_referral_code(request):
     )
     _log("redeemed", ref, None, f"Redeemed by {form.cleaned_data['email']}")
     return JsonResponse({"discount_percent": ref.discount_percent, "message": "Referral applied successfully"})
+
+
+def _check_api_key(request):
+    return request.headers.get("X-Internal-Api-Key") == settings.INTERNAL_API_KEY
+
+@csrf_exempt
+def create_partner_request(request):
+    if request.method != "POST" or not _check_api_key(request):
+        return JsonResponse({"error": "unauthorized"}, status=401)
+    data = json.loads(request.body)
+    req, _ = PartnerOnboardingRequest.objects.update_or_create(
+        source_system="leadgen",
+        external_user_id=str(data["user_id"]),
+        defaults={
+            "external_email": data["email"],
+            "external_name": data.get("name", ""),
+        },
+    )
+    return JsonResponse({"status": "queued", "request_id": req.id})
+
+# views.py
+
+@login_required
+@require_http_methods(["POST"])
+def approve_partner_request(request, request_id):
+    if not request.user.is_staff:
+        raise PermissionDenied("Admin access only.")
+    req = get_object_or_404(PartnerOnboardingRequest, id=request_id, status="pending")
+
+    product = request.POST.get("product", "")
+    if product not in dict(PRODUCT_CHOICES):
+        messages.error(request, "Choose a valid product before approving.")
+        return redirect("user_dashboard")
+
+    try:
+        discount_percent = int(request.POST.get("discount_percent", ""))
+        if not (1 <= discount_percent <= 100):
+            raise ValueError
+    except ValueError:
+        messages.error(request, "Discount must be a whole number between 1 and 100.")
+        return redirect("user_dashboard")
+
+    with transaction.atomic():
+        code = ReferralCode.objects.create(
+            code_type="partner",
+            requested_by=request.user,
+            owner_name=req.external_name,
+            owner_email=req.external_email,
+            product=product,
+            discount_percent=discount_percent,
+            approval_status="approved",
+            approved_by=request.user,
+            approved_at=timezone.now(),
+        )
+        req.status = "approved"
+        req.product = product
+        req.referral_code = code
+        req.save(update_fields=["status", "product", "referral_code"])
+        _log("approved", code, request.user,
+             f"Partner onboarding for {req.external_email} ({discount_percent}% off {code.get_product_display()})")
+
+    _sync_approved_code_to_wix(code, request.user)
+    _deliver_code_to_leadgen(req)
+
+    if code.wix_sync_status == "failed":
+        messages.warning(request, f"{code.code} approved, but Wix sync failed: {code.wix_sync_error}")
+    elif not req.callback_delivered:
+        messages.warning(request, f"{code.code} approved, but delivering it to Lead Gen Tool failed — retry from the table below.")
+    else:
+        messages.success(request, f"{code.code} approved and sent to {req.external_email}.")
+
+    return redirect("user_dashboard")
+
+
+@login_required
+@require_http_methods(["POST"])
+def reject_partner_request(request, request_id):
+    if not request.user.is_staff:
+        raise PermissionDenied("Admin access only.")
+    req = get_object_or_404(PartnerOnboardingRequest, id=request_id, status="pending")
+    with transaction.atomic():
+        req.status = "rejected"
+        req.save(update_fields=["status"])
+        _log("rejected", None, request.user, f"Partner onboarding request rejected for {req.external_email}")
+    messages.success(request, f"Request from {req.external_email} rejected.")
+    return redirect("user_dashboard")
+
+
+@require_http_methods(["POST"])
+def retry_partner_delivery(request, request_id):
+    if not request.user.is_staff:
+        raise PermissionDenied("Admin access only.")
+    req = get_object_or_404(
+        PartnerOnboardingRequest, id=request_id, status="approved",
+        callback_delivered=False, referral_code__isnull=False,
+    )
+    _deliver_code_to_leadgen(req)
+    if req.callback_delivered:
+        messages.success(request, f"{req.referral_code.code} delivered to Lead Gen Tool.")
+    else:
+        messages.warning(request, f"Retry failed — {req.referral_code.code} still not delivered. Check Lead Gen Tool connectivity.")
+    return redirect("user_dashboard")
+
+
+def _deliver_code_to_leadgen(req):
+    import requests
+    try:
+        resp = requests.post(
+            f"{settings.LEADGEN_BASE_URL}/api/coupon-assigned/",
+            json={
+                "user_id": req.external_user_id,
+                "code": req.referral_code.code,
+                "discount_percent": req.referral_code.discount_percent,
+                "product": req.product,
+            },
+            headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
+            timeout=5,
+        )
+        req.callback_delivered = resp.ok
+        req.save(update_fields=["callback_delivered"])
+    except requests.RequestException:
+        req.callback_delivered = False
+        req.save(update_fields=["callback_delivered"])
+        # log it — admin can retry from a "failed deliveries" view later

@@ -20,4 +20,10 @@ urlpatterns = [
 
     path("apply-code/", views.apply_code_page, name="apply_code_page"),
     path("apply-code/submit/", views.apply_referral_code, name="apply_referral_code"),
+
+    path("partner-requests/<int:request_id>/approve/", views.approve_partner_request, name="approve_partner_request"),
+    path("partner-requests/<int:request_id>/reject/", views.reject_partner_request, name="reject_partner_request"),
+    path("partner-requests/<int:request_id>/retry-delivery/", views.retry_partner_delivery, name="retry_partner_delivery"),
+
+    path("api/partner-requests/", views.create_partner_request, name="api_create_partner_request"),
 ]

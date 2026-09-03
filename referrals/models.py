@@ -178,3 +178,23 @@ class UserAccess(models.Model):
 
     def __str__(self):
         return f"{self.user.username}: {', '.join(self.allowed_products) or 'no products'}"
+    
+
+class PartnerOnboardingRequest(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "Pending Approval"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+    ]
+    source_system = models.CharField(max_length=50)       # e.g. "leadgen"
+    external_user_id = models.CharField(max_length=100)   # their internal user pk
+    external_email = models.EmailField()
+    external_name = models.CharField(max_length=150, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="pending")
+    product = models.CharField(max_length=20, choices=PRODUCT_CHOICES, blank=True)  # set on approval
+    referral_code = models.ForeignKey(ReferralCode, null=True, blank=True, on_delete=models.SET_NULL)
+    callback_delivered = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("source_system", "external_user_id")
