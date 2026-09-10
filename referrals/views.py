@@ -16,7 +16,11 @@ from django.conf import settings
 import json
 from . import wix_sync
 from .forms import AddUserForm, ApplyCodeForm, EditCodeForm, RequestCodeForm
-from .models import AuditLog, DEFAULT_CUSTOMER_DISCOUNT, PRODUCT_CHOICES, PartnerOnboardingRequest, Referral, ReferralCode, UserAccess
+from .models import (
+    AuditLog, DEFAULT_CUSTOMER_DISCOUNT, PRODUCT_CHOICES,
+    PartnerOnboardingRequest, Referral, ReferralCode, UserAccess,
+    StarterCouponIssuance,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +104,23 @@ def _sync_deactivated_code_to_wix(code, actor):
         code.wix_sync_error = error or "Unknown error"
         code.save(update_fields=["wix_sync_status", "wix_sync_error"])
         _log("wix_sync_failed", code, actor, f"Disable coupon failed: {error}")
+
+
+def _check_api_key(request):
+    return request.headers.get("X-Internal-Api-Key") == settings.INTERNAL_API_KEY
+
+
+def _leadgen_system_user():
+    """
+    Service account used to attribute ReferralCodes auto-issued via the
+    Lead Gen API (starter coupons) rather than through the admin UI.
+    is_active=False so it can never be used to log in.
+    """
+    user, _ = User.objects.get_or_create(
+        username="leadgen_system",
+        defaults={"is_staff": False, "is_active": False},
+    )
+    return user
 
 
 # ---------------------------------------------------------------------------
@@ -442,25 +463,39 @@ def apply_referral_code(request):
     return JsonResponse({"discount_percent": ref.discount_percent, "message": "Referral applied successfully"})
 
 
-def _check_api_key(request):
-    return request.headers.get("X-Internal-Api-Key") == settings.INTERNAL_API_KEY
+# ---------------------------------------------------------------------------
+# Partner onboarding — inbound from Lead Gen ("Become a Channel Partner")
+# ---------------------------------------------------------------------------
 
 @csrf_exempt
 def create_partner_request(request):
     if request.method != "POST" or not _check_api_key(request):
         return JsonResponse({"error": "unauthorized"}, status=401)
     data = json.loads(request.body)
+    external_user_id = str(data["user_id"])
+
+    existing = PartnerOnboardingRequest.objects.filter(
+        source_system="leadgen", external_user_id=external_user_id
+    ).first()
+
+    if existing and existing.status in ("pending", "approved"):
+        return JsonResponse({"status": existing.status, "request_id": existing.id})
+
     req, _ = PartnerOnboardingRequest.objects.update_or_create(
         source_system="leadgen",
-        external_user_id=str(data["user_id"]),
+        external_user_id=external_user_id,
         defaults={
             "external_email": data["email"],
             "external_name": data.get("name", ""),
+            "application_data": data.get("application_data", {}),  # NEW
+            "status": "pending",
+            "product": "",
+            "referral_code": None,
+            "callback_delivered": False,
         },
     )
     return JsonResponse({"status": "queued", "request_id": req.id})
 
-# views.py
 
 @login_required
 @require_http_methods(["POST"])
@@ -548,7 +583,7 @@ def _deliver_code_to_leadgen(req):
     import requests
     try:
         resp = requests.post(
-            f"{settings.LEADGEN_BASE_URL}/api/coupon-assigned/",
+            f"{settings.LEADGEN_BASE_URL}/api/partner-code-assigned/",
             json={
                 "user_id": req.external_user_id,
                 "code": req.referral_code.code,
@@ -558,9 +593,247 @@ def _deliver_code_to_leadgen(req):
             headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
             timeout=5,
         )
+        print("LEADGEN DELIVERY:", resp.status_code, resp.text)  # TEMP DEBUG
         req.callback_delivered = resp.ok
         req.save(update_fields=["callback_delivered"])
-    except requests.RequestException:
+    except requests.RequestException as e:
+        print("LEADGEN DELIVERY FAILED:", repr(e))  # TEMP DEBUG
         req.callback_delivered = False
         req.save(update_fields=["callback_delivered"])
-        # log it — admin can retry from a "failed deliveries" view later
+
+
+# ---------------------------------------------------------------------------
+# Lead Gen Tool integration — inbound API called by leads/referral_hub_client.py
+# All views here use X-Internal-Api-Key auth (no session/login), csrf_exempt.
+# ---------------------------------------------------------------------------
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def request_starter_coupon_api(request):
+    """
+    POST /referral/starter-coupon
+    Auto-issues (no admin approval step) a customer-type ReferralCode for a
+    Lead Gen signup, and records the link in StarterCouponIssuance so
+    /referral/my-coupon can look it up again later (e.g. after a missed
+    webhook on the Lead Gen side).
+    """
+    if not _check_api_key(request):
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    try:
+        data = json.loads(request.body)
+        user_id = str(data["user_id"])
+    except (json.JSONDecodeError, KeyError):
+        return JsonResponse({"error": "invalid payload"}, status=400)
+
+    email = data.get("email", "")
+    name = data.get("name", "")
+    product = data.get("product", "careertrek")  # default product for starter coupons
+
+    if product not in dict(PRODUCT_CHOICES):
+        return JsonResponse({"error": "invalid product"}, status=400)
+
+    # Idempotent: if this Lead Gen user already has a starter coupon, return it
+    # instead of minting a second one.
+    existing = StarterCouponIssuance.objects.filter(
+        source_system="leadgen", external_user_id=user_id
+    ).select_related("referral_code").first()
+    if existing:
+        code = existing.referral_code
+        return JsonResponse({
+            "owner_id": user_id,
+            "coupon_id": code.id,
+            "code": code.code,
+            "discount_percent": code.discount_percent,
+            "applicable_products": [code.product],
+            "valid_until": None,
+        })
+
+    system_user = _leadgen_system_user()
+
+    with transaction.atomic():
+        code = ReferralCode.objects.create(
+            code_type="customer",
+            requested_by=system_user,
+            owner_name=name,
+            owner_email=email,
+            product=product,
+            discount_percent=DEFAULT_CUSTOMER_DISCOUNT,
+            approval_status="approved",
+            approved_by=system_user,
+            approved_at=timezone.now(),
+        )
+        StarterCouponIssuance.objects.create(
+            source_system="leadgen",
+            external_user_id=user_id,
+            external_email=email,
+            referral_code=code,
+        )
+        _log("approved", code, system_user, f"Starter coupon auto-issued for Lead Gen user {user_id} ({email})")
+
+    _sync_approved_code_to_wix(code, system_user)
+
+    return JsonResponse({
+        "owner_id": user_id,
+        "coupon_id": code.id,
+        "code": code.code,
+        "discount_percent": code.discount_percent,
+        "applicable_products": [code.product],
+        "valid_until": None,
+    })
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def my_coupon_api(request):
+    """GET /referral/my-coupon?user_id=... — used by Lead Gen to (re)sync
+    coupon state if a webhook was missed or the user hits refresh."""
+    if not _check_api_key(request):
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    user_id = request.GET.get("user_id", "")
+    if not user_id:
+        return JsonResponse({"error": "user_id required"}, status=400)
+
+    issuance = StarterCouponIssuance.objects.filter(
+        source_system="leadgen", external_user_id=user_id
+    ).select_related("referral_code").first()
+
+    if not issuance:
+        return JsonResponse({"error": "not found"}, status=404)
+
+    code = issuance.referral_code
+    return JsonResponse({
+        "owner_id": user_id,
+        "coupon_id": code.id,
+        "code": code.code,
+        "discount_percent": code.discount_percent,
+        "applicable_products": [code.product],
+        "valid_until": None,
+        "status": "active" if code.is_live else "expired",
+    })
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def my_usage_api(request):
+    """GET /referral/my-usage?user_id=... — returns redemption events for
+    this Lead Gen user's starter coupon. Referral Hub is the source of
+    truth; Lead Gen only caches this for display."""
+    if not _check_api_key(request):
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    user_id = request.GET.get("user_id", "")
+    if not user_id:
+        return JsonResponse({"error": "user_id required"}, status=400)
+
+    issuance = StarterCouponIssuance.objects.filter(
+        source_system="leadgen", external_user_id=user_id
+    ).select_related("referral_code").first()
+
+    if not issuance:
+        return JsonResponse({"total_referrals": 0, "successful_uses": 0, "events": []})
+
+    referrals = Referral.objects.filter(referral_code=issuance.referral_code).order_by("-created_at")
+
+    total_referrals = referrals.count()
+    successful_uses = referrals.filter(status="converted").count()
+
+    events = [
+        {
+            "event_id": f"ref-{r.id}",
+            "customer_label": r.customer_email,
+            "product": r.product,
+            "occurred_at": r.created_at.isoformat(),
+        }
+        for r in referrals[:50]  # slice only here, for display purposes
+    ]
+
+    return JsonResponse({
+        "total_referrals": total_referrals,
+        "successful_uses": successful_uses,
+        "events": events,
+    })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def partner_request_api(request):
+    """POST /referral/partner-request — same payload/behavior as
+    api/partner-requests/, exposed under the /referral/ prefix so it
+    matches what referral_hub_client.submit_partner_request() calls."""
+    return create_partner_request(request)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def partner_request_status_api(request):
+    """GET /referral/partner-request/status?user_id=..."""
+    if not _check_api_key(request):
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    user_id = request.GET.get("user_id", "")
+    if not user_id:
+        return JsonResponse({"error": "user_id required"}, status=400)
+
+    req = PartnerOnboardingRequest.objects.filter(
+        source_system="leadgen", external_user_id=user_id
+    ).order_by("-created_at").first()
+
+    if not req:
+        return JsonResponse({"error": "not found"}, status=404)
+
+    return JsonResponse({"status": req.status})
+
+def _deliver_partner_deactivation_to_leadgen(req):
+    """Symmetric to _deliver_code_to_leadgen, but for the deactivation event."""
+    import requests
+    try:
+        resp = requests.post(
+            f"{settings.LEADGEN_BASE_URL}/api/partner-code-deactivated/",
+            json={"user_id": req.external_user_id, "code": req.referral_code.code},
+            headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
+            timeout=5,
+        )
+        req.deactivation_delivered = resp.ok
+        req.save(update_fields=["deactivation_delivered"])
+    except requests.RequestException:
+        req.deactivation_delivered = False
+        req.save(update_fields=["deactivation_delivered"])
+
+
+def _deliver_coupon_deactivation_to_leadgen(issuance):
+    """Same idea, for starter (customer) coupons issued via the Lead Gen signup flow."""
+    import requests
+    try:
+        resp = requests.post(
+            f"{settings.LEADGEN_BASE_URL}/api/coupon-deactivated/",
+            json={"user_id": issuance.external_user_id, "code": issuance.referral_code.code},
+            headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
+            timeout=5,
+        )
+        issuance.deactivation_delivered = resp.ok
+        issuance.save(update_fields=["deactivation_delivered"])
+    except requests.RequestException:
+        issuance.deactivation_delivered = False
+        issuance.save(update_fields=["deactivation_delivered"])
+
+
+def _notify_leadgen_of_deactivation(code, actor):
+    """Called after a code is deactivated. Figures out whether this code
+    came from a partner onboarding request or a starter-coupon issuance
+    (or neither — e.g. a code created directly in the admin UI, which has
+    nothing to notify) and pushes the deactivation to Lead Gen Tool."""
+    partner_req = PartnerOnboardingRequest.objects.filter(
+        referral_code=code, status="approved"
+    ).first()
+    if partner_req:
+        _deliver_partner_deactivation_to_leadgen(partner_req)
+        if not partner_req.deactivation_delivered:
+            _log("wix_sync_failed", code, actor,  # reuse existing action or add a new AUDIT_ACTION_CHOICES entry, see note below
+                 "Deactivation notice to Lead Gen Tool failed for partner request")
+        return
+
+    issuance = StarterCouponIssuance.objects.filter(referral_code=code).first()
+    if issuance:
+        _deliver_coupon_deactivation_to_leadgen(issuance)

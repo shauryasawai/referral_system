@@ -126,7 +126,23 @@ class ReferralCode(models.Model):
     def __str__(self):
         return f"{self.code} ({self.get_code_type_display()})"
 
+class StarterCouponIssuance(models.Model):
+    """
+    Links a Lead Gen user to the ReferralCode issued as their starter coupon.
+    Mirrors PartnerOnboardingRequest's source_system/external_user_id pattern
+    so /referral/my-coupon can look up a user's coupon on repeat calls.
+    """
+    source_system = models.CharField(max_length=50)
+    external_user_id = models.CharField(max_length=100)
+    external_email = models.EmailField(blank=True)
+    referral_code = models.ForeignKey(ReferralCode, on_delete=models.CASCADE, related_name="starter_issuances")
+    deactivation_delivered = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        unique_together = ("source_system", "external_user_id")
+        
+        
 class Referral(models.Model):
     """A redemption record: one row per customer who successfully applied a code at checkout."""
     referral_code = models.ForeignKey(ReferralCode, on_delete=models.CASCADE, related_name="referrals")
@@ -190,10 +206,12 @@ class PartnerOnboardingRequest(models.Model):
     external_user_id = models.CharField(max_length=100)   # their internal user pk
     external_email = models.EmailField()
     external_name = models.CharField(max_length=150, blank=True)
+    application_data = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="pending")
     product = models.CharField(max_length=20, choices=PRODUCT_CHOICES, blank=True)  # set on approval
     referral_code = models.ForeignKey(ReferralCode, null=True, blank=True, on_delete=models.SET_NULL)
     callback_delivered = models.BooleanField(default=False)
+    deactivation_delivered = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

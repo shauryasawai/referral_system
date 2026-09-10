@@ -26,4 +26,15 @@ urlpatterns = [
     path("partner-requests/<int:request_id>/retry-delivery/", views.retry_partner_delivery, name="retry_partner_delivery"),
 
     path("api/partner-requests/", views.create_partner_request, name="api_create_partner_request"),
+
+    # ─────────────────────────────────────────────────────────────────
+    # Lead Gen Tool integration — server-to-server API, called by
+    # leads/referral_hub_client.py. Auth via X-Internal-Api-Key, not
+    # session auth, so these sit outside the login-required views above.
+    # ─────────────────────────────────────────────────────────────────
+    path("referral/starter-coupon", views.request_starter_coupon_api, name="api_starter_coupon"),
+    path("referral/my-coupon", views.my_coupon_api, name="api_my_coupon"),
+    path("referral/my-usage", views.my_usage_api, name="api_my_usage"),
+    path("referral/partner-request", views.partner_request_api, name="api_partner_request"),
+    path("referral/partner-request/status", views.partner_request_status_api, name="api_partner_request_status"),
 ]

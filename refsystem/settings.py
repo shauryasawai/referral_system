@@ -29,6 +29,17 @@ DEBUG = True
 ALLOWED_HOSTS = ['*']
 
 
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "https://lead-generation-tool-184816679904.asia-south2.run.app",
+    "https://data-base-interaction.vercel.app",
+    "http://127.0.0.1:8001",
+    "http://localhost:8001",
+]
+
+CSRF_COOKIE_SECURE = False
+SESSION_COOKIE_SECURE = False
 # Application definition
 
 INSTALLED_APPS = [
@@ -140,5 +151,5 @@ load_dotenv()
 
 WIX_API_KEY = os.getenv("WIX_API_KEY")
 WIX_SITE_ID = os.getenv("WIX_SITE_ID")
-LEADGEN_BASE_URL= os.getenv("LEADGEN_BASE_URL","http://127.0.0.1:8000/")
+LEADGEN_BASE_URL= os.getenv("LEADGEN_BASE_URL")
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")

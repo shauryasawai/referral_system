@@ -96,29 +96,46 @@
     <div class="panel-note">New signups from Lead Gen Tool waiting to be approved as channel partners. Pick a product to generate their code.</div>
     <div class="table-wrap">
     <table>
-    <tr><th>Name</th><th>Email</th><th>Signed up</th><th>Product</th><th>Action</th></tr>
+    <tr><th>Name</th><th>Email</th><th>Signed up</th><th>Submitted details</th><th>Product</th><th>Action</th></tr>
     {% for r in partner_requests %}
     <tr>
       <td>{{ r.external_name|default:"—" }}</td>
       <td>{{ r.external_email }}</td>
       <td>{{ r.created_at|date:"M d, H:i" }}</td>
+      <td>
+        {% if r.application_data %}
+          <div class="applicant-details">
+            {% for key, value in r.application_data.items %}
+              <div class="applicant-detail-row">
+                <span class="applicant-detail-label">{{ key|title }}:</span>
+                <span class="applicant-detail-value">{{ value }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <span class="subtext">No additional details submitted</span>
+        {% endif %}
+      </td>
       <td colspan="2">
         <form action="{% url 'approve_partner_request' r.id %}" method="post" class="inline-form">
           {% csrf_token %}
           <select name="product" required>
-            <option value="" disabled selected>Choose product</option>
+            <option value="" disabled {% if not r.application_data.product %}selected{% endif %}>Choose product</option>
             {% for value, label in product_choices %}
-              <option value="{{ value }}">{{ label }}</option>
+              <option value="{{ value }}" {% if r.application_data.product == value %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
-          <input type="number" name="discount_percent" min="1" max="100" step="1" placeholder="Discount %" required style="width:110px">
+          <input type="number" name="discount_percent" min="1" max="100" step="1"
+                 placeholder="Discount %"
+                 value="{{ r.application_data.requested_discount_percent|default:'' }}"
+                 required style="width:110px">
           <button type="submit" class="btn-approve">Approve &amp; generate code</button>
           <button type="submit" formaction="{% url 'reject_partner_request' r.id %}" formnovalidate class="btn-reject">Reject</button>
         </form>
       </td>
     </tr>
     {% empty %}
-    <tr class="empty-row"><td colspan="4">No pending partner requests.</td></tr>
+    <tr class="empty-row"><td colspan="5">No pending partner requests.</td></tr>
     {% endfor %}
     </table>
     </div>
@@ -143,6 +160,34 @@
       <td>
         <form action="{% url 'retry_partner_delivery' r.id %}" method="post" class="inline-form">
           {% csrf_token %}<button type="submit" class="btn-ghost" style="padding:5px 10px;font-size:12px">Retry delivery</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if deactivation_failed_deliveries %}
+  <div class="card">
+    <div class="card-head">
+      <h3>Deactivated but not synced to Lead Gen</h3>
+      <span class="badge badge-deactivated">{{ deactivation_failed_deliveries|length }}</span>
+    </div>
+    <div class="panel-note">These codes were deactivated here, but the notice to Lead Gen Tool failed — the partner may still see their code as active there.</div>
+    <div class="table-wrap">
+    <table>
+    <tr><th>Code</th><th>Email</th><th>Product</th><th>Deactivated</th><th></th></tr>
+    {% for r in deactivation_failed_deliveries %}
+    <tr>
+      <td><span class="code-chip">{{ r.referral_code.code }}</span></td>
+      <td>{{ r.external_email }}</td>
+      <td>{{ r.get_product_display }}</td>
+      <td>{{ r.referral_code.deactivated_at|date:"M d, H:i" }}</td>
+      <td>
+        <form action="{% url 'retry_partner_deactivation' r.id %}" method="post" class="inline-form">
+          {% csrf_token %}<button type="submit" class="btn-ghost" style="padding:5px 10px;font-size:12px">Retry sync</button>
         </form>
       </td>
     </tr>
@@ -195,4 +240,11 @@
   {% endif %}
 
 </div>
+
+<style>
+  .applicant-details { display: flex; flex-direction: column; gap: 2px; }
+  .applicant-detail-row { font-size: 12px; }
+  .applicant-detail-label { color: #6c757d; font-weight: 600; margin-right: 4px; }
+  .applicant-detail-value { color: #212529; }
+</style>
 {% endblock %}
