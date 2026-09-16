@@ -727,7 +727,7 @@ def request_starter_coupon_api(request):
             "code": code.code,
             "discount_percent": code.discount_percent,
             "applicable_products": [code.product],
-            "valid_until": code.expires_at.isoformat() if code.expires_at else None,
+            "valid_until": code.expires_at.date().isoformat() if code.expires_at else None,
         })
 
     system_user = _leadgen_system_user()
@@ -762,7 +762,7 @@ def request_starter_coupon_api(request):
         "code": code.code,
         "discount_percent": code.discount_percent,
         "applicable_products": [code.product],
-        "valid_until": code.expires_at.isoformat() if code.expires_at else None,
+        "valid_until": code.expires_at.date().isoformat() if code.expires_at else None,
     })
 
 
