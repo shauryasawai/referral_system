@@ -1,10 +1,12 @@
+from datetime import timedelta
+
 from django.contrib import messages
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth.models import Group, User
 from django.core.exceptions import PermissionDenied
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
@@ -15,14 +17,16 @@ from django.http import JsonResponse
 from django.conf import settings
 import json
 from . import wix_sync
+from .masking import mask_code, mask_email
+import logging, hmac, hashlib
 from .forms import AddUserForm, ApplyCodeForm, EditCodeForm, RequestCodeForm
 from .models import (
-    AuditLog, DEFAULT_CUSTOMER_DISCOUNT, PRODUCT_CHOICES,
-    PartnerOnboardingRequest, Referral, ReferralCode, UserAccess,
+    DEFAULT_CODE_VALIDITY_YEARS, AuditLog, DEFAULT_CUSTOMER_DISCOUNT, PRODUCT_CHOICES,
+    PartnerOnboardingRequest, PurchaseRewardIssuance, Referral, ReferralCode, UserAccess,
     StarterCouponIssuance,
 )
 
-
+logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -107,7 +111,9 @@ def _sync_deactivated_code_to_wix(code, actor):
 
 
 def _check_api_key(request):
-    return request.headers.get("X-Internal-Api-Key") == settings.INTERNAL_API_KEY
+    header_key = request.headers.get("X-Internal-Api-Key")
+    query_key = request.GET.get("api_key")
+    return header_key == settings.INTERNAL_API_KEY or query_key == settings.INTERNAL_API_KEY
 
 
 def _leadgen_system_user():
@@ -122,6 +128,18 @@ def _leadgen_system_user():
     )
     return user
 
+def _wix_system_user():
+    """
+    Service account used to attribute ReferralCodes and Referrals that
+    originate on Wix's side (coupon created during a CareerTrek purchase,
+    or a usage event) rather than through the admin UI. is_active=False so
+    it can never be used to log in.
+    """
+    user, _ = User.objects.get_or_create(
+        username="wix_system",
+        defaults={"is_staff": False, "is_active": False},
+    )
+    return user
 
 # ---------------------------------------------------------------------------
 # Partner / customer dashboard — each user sees ONLY their own codes
@@ -192,9 +210,11 @@ def approve_code(request, code_id):
         raise PermissionDenied("Admin access only.")
     code = get_object_or_404(ReferralCode, id=code_id, approval_status="pending")
     with transaction.atomic():
+        now = timezone.now()
         code.approval_status = "approved"
         code.approved_by = request.user
-        code.approved_at = timezone.now()
+        code.approved_at = now
+        code.expires_at = now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS)
         code.save()
         _log("approved", code, request.user)
 
@@ -212,7 +232,6 @@ def approve_code(request, code_id):
         messages.success(request, f"{code.code} approved and live.")
     return redirect("user_dashboard")
 
-
 @login_required
 @require_http_methods(["POST"])
 def reject_code(request, code_id):
@@ -228,12 +247,14 @@ def reject_code(request, code_id):
     messages.success(request, f"{code.code} rejected.")
     return redirect("user_dashboard")
 
+def _fmt_date(d):
+    return d.strftime("%Y-%m-%d") if d else "never"
 
 @login_required
 def edit_code(request, code_id):
     """Owner can edit discount while their code is still pending. Staff can edit anytime,
-    including renaming the code itself. Deactivated codes can no longer be edited by anyone —
-    the only path forward is requesting a fresh code."""
+    including renaming the code itself and adjusting its expiry. Deactivated codes can no
+    longer be edited by anyone — the only path forward is requesting a fresh code."""
     code = get_object_or_404(ReferralCode, id=code_id)
     is_owner = code.requested_by_id == request.user.id
     editable = code.approval_status != "approved" or code.active  # blocks edits on deactivated codes
@@ -243,23 +264,34 @@ def edit_code(request, code_id):
         raise PermissionDenied("You cannot edit this code.")
 
     if request.method == "POST":
-        form = EditCodeForm(request.POST, instance=code, allow_code_edit=request.user.is_staff)
+        form = EditCodeForm(
+            request.POST,
+            instance=code,
+            allow_code_edit=request.user.is_staff,
+            initial={"code": code.code, "discount_percent": code.discount_percent, "expires_at": code.expires_at},
+        )
         if form.is_valid():
-            old_code, old_discount = code.code, code.discount_percent
+            old_code, old_discount, old_expiry = code.code, code.discount_percent, code.expires_at
             code.code = form.cleaned_data["code"]
             code.discount_percent = form.cleaned_data["discount_percent"]
+            code.expires_at = form.cleaned_data["expires_at"]
             code.save()
+
             changes = []
             if old_code != code.code:
-                changes.append(f"code {old_code} to {code.code}")
+                changes.append(f"code {mask_code(old_code)} to {mask_code(code.code)}")
             if old_discount != code.discount_percent:
                 changes.append(f"discount {old_discount}% to {code.discount_percent}%")
+            if old_expiry != code.expires_at:
+                changes.append(f"expiry {_fmt_date(old_expiry)} to {_fmt_date(code.expires_at)}")
             _log("edited", code, request.user, "; ".join(changes) if changes else "No changes")
 
-            # If this code is already live on Wix and either the code string or the
-            # discount changed, push an update so Wix doesn't drift out of sync.
-            # (Only reachable by staff, since owners can only edit while pending.)
-            if changes and code.wix_sync_status == "synced" and wix_sync.should_sync(code):
+            # If this code is already live on Wix and the code string or discount changed,
+            # push an update so Wix doesn't drift out of sync. (Expiry alone doesn't trigger
+            # a Wix resync unless wix_sync/Wix's coupon model actually tracks expiry too —
+            # see the earlier note on whether Wix should mirror expires_at.)
+            if (old_code != code.code or old_discount != code.discount_percent) \
+                    and code.wix_sync_status == "synced" and wix_sync.should_sync(code):
                 success, error = wix_sync.disable_coupon(code)  # retire the old coupon...
                 if success:
                     _sync_approved_code_to_wix(code, request.user)  # ...and create a fresh one
@@ -272,11 +304,36 @@ def edit_code(request, code_id):
             messages.success(request, "Code updated.")
             return redirect("user_dashboard")
     else:
-        form = EditCodeForm(initial={"code": code.code, "discount_percent": code.discount_percent},
-                             instance=code, allow_code_edit=request.user.is_staff)
+        form = EditCodeForm(
+            initial={"code": code.code, "discount_percent": code.discount_percent, "expires_at": code.expires_at},
+            instance=code,
+            allow_code_edit=request.user.is_staff,
+        )
 
     return render(request, "referrals/edit_code.html", {"code": code, "form": form, "is_ops": _in_group(request.user, "Ops")})
 
+
+def _notify_leadgen_of_deactivation(code, actor):
+    """Called after a code is deactivated. Figures out whether this code
+    came from a partner onboarding request or a starter-coupon issuance
+    (or neither — e.g. a code created directly in the admin UI, which has
+    nothing to notify) and pushes the deactivation to Lead Gen Tool."""
+    partner_req = PartnerOnboardingRequest.objects.filter(
+        referral_code=code, status="approved"
+    ).first()
+    if partner_req:
+        _deliver_partner_deactivation_to_leadgen(partner_req)
+        if not partner_req.deactivation_delivered:
+            _log("leadgen_delivery_failed", code, actor,
+                 f"Deactivation notice to Lead Gen Tool failed for partner request ({mask_code(code.code)})")
+        return
+
+    issuance = StarterCouponIssuance.objects.filter(referral_code=code).first()
+    if issuance:
+        _deliver_coupon_deactivation_to_leadgen(issuance)
+        if not issuance.deactivation_delivered:
+            _log("leadgen_delivery_failed", code, actor,
+                 f"Deactivation notice to Lead Gen Tool failed for starter coupon ({mask_code(code.code)})")
 
 @login_required
 @require_http_methods(["POST"])
@@ -293,6 +350,7 @@ def deactivate_code(request, code_id):
         _log("deactivated", code, request.user)
 
     _sync_deactivated_code_to_wix(code, request.user)
+    _notify_leadgen_of_deactivation(code, request.user)  # NEW — was previously never called
 
     if code.wix_sync_status == "failed":
         messages.warning(
@@ -303,7 +361,6 @@ def deactivate_code(request, code_id):
     else:
         messages.success(request, f"{code.code} deactivated permanently. Request a new code if you need one.")
     return redirect("user_dashboard")
-
 
 @login_required
 @require_http_methods(["POST"])
@@ -423,9 +480,14 @@ def ops_dashboard(request):
     if not _in_group(request.user, "Ops"):
         raise PermissionDenied("Ops access only.")
     codes = ReferralCode.objects.filter(approval_status="approved").select_related("requested_by", "approved_by")
+    now = timezone.now()
     return render(request, "referrals/ops_dashboard.html", {
         "live_codes": codes,
-        "ops_counts": {"live": codes.filter(active=True).count(), "deactivated": codes.filter(active=False).count()},
+        "ops_counts": {
+            "live": codes.filter(active=True).exclude(expires_at__lte=now).count(),
+            "deactivated": codes.filter(active=False).count(),
+            "expired": codes.filter(active=True, expires_at__lte=now).count(),
+        },
         "is_ops": True,
     })
 
@@ -459,7 +521,7 @@ def apply_referral_code(request):
         product=form.cleaned_data["product"],
         discount_applied=ref.discount_percent,
     )
-    _log("redeemed", ref, None, f"Redeemed by {form.cleaned_data['email']}")
+    _log("redeemed", ref, None, f"Redeemed by {mask_email(form.cleaned_data['email'])}")
     return JsonResponse({"discount_percent": ref.discount_percent, "message": "Referral applied successfully"})
 
 
@@ -518,6 +580,7 @@ def approve_partner_request(request, request_id):
         return redirect("user_dashboard")
 
     with transaction.atomic():
+        now = timezone.now()
         code = ReferralCode.objects.create(
             code_type="partner",
             requested_by=request.user,
@@ -527,14 +590,15 @@ def approve_partner_request(request, request_id):
             discount_percent=discount_percent,
             approval_status="approved",
             approved_by=request.user,
-            approved_at=timezone.now(),
+            approved_at=now,
+            expires_at=now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS),
         )
         req.status = "approved"
         req.product = product
         req.referral_code = code
         req.save(update_fields=["status", "product", "referral_code"])
         _log("approved", code, request.user,
-             f"Partner onboarding for {req.external_email} ({discount_percent}% off {code.get_product_display()})")
+             f"Partner onboarding for {mask_email(req.external_email)} ({discount_percent}% off {code.get_product_display()})")
 
     _sync_approved_code_to_wix(code, request.user)
     _deliver_code_to_leadgen(req)
@@ -558,7 +622,8 @@ def reject_partner_request(request, request_id):
     with transaction.atomic():
         req.status = "rejected"
         req.save(update_fields=["status"])
-        _log("rejected", None, request.user, f"Partner onboarding request rejected for {req.external_email}")
+        # After
+        _log("rejected", None, request.user, f"Partner onboarding request rejected for {mask_email(req.external_email)}")
     messages.success(request, f"Request from {req.external_email} rejected.")
     return redirect("user_dashboard")
 
@@ -581,23 +646,39 @@ def retry_partner_delivery(request, request_id):
 
 def _deliver_code_to_leadgen(req):
     import requests
+
+    base_url = settings.LEADGEN_BASE_URL
+    if not base_url.lower().startswith("https://"):
+        logger.error("Refused to deliver %s: LEADGEN_BASE_URL is not HTTPS", mask_code(req.referral_code.code))
+        req.callback_delivered = False
+        req.save(update_fields=["callback_delivered"])
+        return
+
+    payload = {
+        "user_id": req.external_user_id,
+        "code": req.referral_code.code,
+        "discount_percent": req.referral_code.discount_percent,
+        "product": req.product,
+    }
+    headers = {"X-Internal-Api-Key": settings.INTERNAL_API_KEY}
+
+    # Optional: sign the body so Lead Gen Tool can verify it wasn't tampered
+    # with, on top of TLS. Set LEADGEN_SHARED_SECRET in settings to enable.
+    shared_secret = getattr(settings, "LEADGEN_SHARED_SECRET", None)
+    if shared_secret:
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        headers["X-Signature"] = hmac.new(shared_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+
     try:
         resp = requests.post(
-            f"{settings.LEADGEN_BASE_URL}/api/partner-code-assigned/",
-            json={
-                "user_id": req.external_user_id,
-                "code": req.referral_code.code,
-                "discount_percent": req.referral_code.discount_percent,
-                "product": req.product,
-            },
-            headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
-            timeout=5,
+            f"{base_url}/api/partner-code-assigned/",
+            json=payload, headers=headers, timeout=20,
         )
-        print("LEADGEN DELIVERY:", resp.status_code, resp.text)  # TEMP DEBUG
+        logger.info("Lead Gen delivery for %s: HTTP %s", mask_code(req.referral_code.code), resp.status_code)
         req.callback_delivered = resp.ok
         req.save(update_fields=["callback_delivered"])
     except requests.RequestException as e:
-        print("LEADGEN DELIVERY FAILED:", repr(e))  # TEMP DEBUG
+        logger.warning("Lead Gen delivery failed for %s: %s", mask_code(req.referral_code.code), e)
         req.callback_delivered = False
         req.save(update_fields=["callback_delivered"])
 
@@ -646,12 +727,13 @@ def request_starter_coupon_api(request):
             "code": code.code,
             "discount_percent": code.discount_percent,
             "applicable_products": [code.product],
-            "valid_until": None,
+            "valid_until": code.expires_at.isoformat() if code.expires_at else None,
         })
 
     system_user = _leadgen_system_user()
 
     with transaction.atomic():
+        now = timezone.now()
         code = ReferralCode.objects.create(
             code_type="customer",
             requested_by=system_user,
@@ -661,7 +743,8 @@ def request_starter_coupon_api(request):
             discount_percent=DEFAULT_CUSTOMER_DISCOUNT,
             approval_status="approved",
             approved_by=system_user,
-            approved_at=timezone.now(),
+            approved_at=now,
+            expires_at=now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS),
         )
         StarterCouponIssuance.objects.create(
             source_system="leadgen",
@@ -669,7 +752,7 @@ def request_starter_coupon_api(request):
             external_email=email,
             referral_code=code,
         )
-        _log("approved", code, system_user, f"Starter coupon auto-issued for Lead Gen user {user_id} ({email})")
+        _log("approved", code, system_user, f"Starter coupon auto-issued for Lead Gen user {user_id} ({mask_email(email)})")
 
     _sync_approved_code_to_wix(code, system_user)
 
@@ -679,7 +762,7 @@ def request_starter_coupon_api(request):
         "code": code.code,
         "discount_percent": code.discount_percent,
         "applicable_products": [code.product],
-        "valid_until": None,
+        "valid_until": code.expires_at.isoformat() if code.expires_at else None,
     })
 
 
@@ -788,33 +871,70 @@ def partner_request_status_api(request):
 def _deliver_partner_deactivation_to_leadgen(req):
     """Symmetric to _deliver_code_to_leadgen, but for the deactivation event."""
     import requests
-    try:
-        resp = requests.post(
-            f"{settings.LEADGEN_BASE_URL}/api/partner-code-deactivated/",
-            json={"user_id": req.external_user_id, "code": req.referral_code.code},
-            headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
-            timeout=5,
-        )
-        req.deactivation_delivered = resp.ok
-        req.save(update_fields=["deactivation_delivered"])
-    except requests.RequestException:
+
+    base_url = settings.LEADGEN_BASE_URL
+    if not base_url.lower().startswith("https://"):
+        logger.error("Refused to deliver deactivation for %s: LEADGEN_BASE_URL is not HTTPS",
+                      mask_code(req.referral_code.code))
         req.deactivation_delivered = False
         req.save(update_fields=["deactivation_delivered"])
+        return
 
+    payload = {"user_id": req.external_user_id, "code": req.referral_code.code}
+    headers = {"X-Internal-Api-Key": settings.INTERNAL_API_KEY}
+
+    shared_secret = getattr(settings, "LEADGEN_SHARED_SECRET", None)
+    if shared_secret:
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        headers["X-Signature"] = hmac.new(shared_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+
+    try:
+        resp = requests.post(
+            f"{base_url}/api/partner-code-deactivated/",
+            json=payload, headers=headers, timeout=20,
+        )
+        logger.info("Lead Gen deactivation delivery for %s: HTTP %s",
+                     mask_code(req.referral_code.code), resp.status_code)
+        req.deactivation_delivered = resp.ok
+        req.save(update_fields=["deactivation_delivered"])
+    except requests.RequestException as e:
+        logger.warning("Lead Gen deactivation delivery failed for %s: %s",
+                        mask_code(req.referral_code.code), e)
+        req.deactivation_delivered = False
+        req.save(update_fields=["deactivation_delivered"])
 
 def _deliver_coupon_deactivation_to_leadgen(issuance):
     """Same idea, for starter (customer) coupons issued via the Lead Gen signup flow."""
     import requests
+
+    base_url = settings.LEADGEN_BASE_URL
+    if not base_url.lower().startswith("https://"):
+        logger.error("Refused to deliver deactivation for %s: LEADGEN_BASE_URL is not HTTPS",
+                      mask_code(issuance.referral_code.code))
+        issuance.deactivation_delivered = False
+        issuance.save(update_fields=["deactivation_delivered"])
+        return
+
+    payload = {"user_id": issuance.external_user_id, "code": issuance.referral_code.code}
+    headers = {"X-Internal-Api-Key": settings.INTERNAL_API_KEY}
+
+    shared_secret = getattr(settings, "LEADGEN_SHARED_SECRET", None)
+    if shared_secret:
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        headers["X-Signature"] = hmac.new(shared_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+
     try:
         resp = requests.post(
-            f"{settings.LEADGEN_BASE_URL}/api/coupon-deactivated/",
-            json={"user_id": issuance.external_user_id, "code": issuance.referral_code.code},
-            headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
-            timeout=5,
+            f"{base_url}/api/coupon-deactivated/",
+            json=payload, headers=headers, timeout=20,
         )
+        logger.info("Lead Gen coupon deactivation delivery for %s: HTTP %s",
+                     mask_code(issuance.referral_code.code), resp.status_code)
         issuance.deactivation_delivered = resp.ok
         issuance.save(update_fields=["deactivation_delivered"])
-    except requests.RequestException:
+    except requests.RequestException as e:
+        logger.warning("Lead Gen coupon deactivation delivery failed for %s: %s",
+                        mask_code(issuance.referral_code.code), e)
         issuance.deactivation_delivered = False
         issuance.save(update_fields=["deactivation_delivered"])
 
@@ -830,10 +950,222 @@ def _notify_leadgen_of_deactivation(code, actor):
     if partner_req:
         _deliver_partner_deactivation_to_leadgen(partner_req)
         if not partner_req.deactivation_delivered:
-            _log("wix_sync_failed", code, actor,  # reuse existing action or add a new AUDIT_ACTION_CHOICES entry, see note below
+            _log("leadgen_delivery_failed", code, actor,
                  "Deactivation notice to Lead Gen Tool failed for partner request")
         return
 
     issuance = StarterCouponIssuance.objects.filter(referral_code=code).first()
     if issuance:
         _deliver_coupon_deactivation_to_leadgen(issuance)
+        if not issuance.deactivation_delivered:
+            _log("leadgen_delivery_failed", code, actor,
+                 "Deactivation notice to Lead Gen Tool failed for starter coupon")
+        
+# ---------------------------------------------------------------------------
+# CareerTrek / Wix integration — inbound APIs for coupons created directly
+# on Wix (not through Referral Hub's own approval flow) and for usage
+# events from purchases made on CareerTrek. Server-to-server, same
+# X-Internal-Api-Key auth as the Lead Gen integration.
+# ---------------------------------------------------------------------------
+@csrf_exempt
+@require_http_methods(["POST"])
+def issue_purchase_reward_coupon_api(request):
+    """
+    POST /careertrek/purchase-reward-coupon
+    Called by a Wix Automation right after a plan purchase completes.
+    Auto-issues (no admin approval) a new customer-type ReferralCode as a
+    reward for the purchase, then pushes it live to Wix so the customer can
+    redeem it on a future purchase.
+
+    Idempotent on (source_system, external_order_id) via
+    PurchaseRewardIssuance, so a retried/duplicate Wix Automation run
+    doesn't mint a second reward for the same order.
+    """
+    if not _check_api_key(request):
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    try:
+        data = json.loads(request.body)
+        user_id = str(data["user_id"])
+        order_id = str(data["order_id"])
+    except (json.JSONDecodeError, KeyError):
+        return JsonResponse({"error": "invalid payload"}, status=400)
+
+    email = data.get("email", "")
+    name = data.get("name", "")
+    product = data.get("product", "careertrek")
+    discount_percent = int(data.get("discount_percent", DEFAULT_CUSTOMER_DISCOUNT))
+
+    if product not in dict(PRODUCT_CHOICES):
+        return JsonResponse({"error": "invalid product"}, status=400)
+
+    existing = PurchaseRewardIssuance.objects.filter(
+        source_system="wix", external_order_id=order_id
+    ).select_related("referral_code").first()
+    if existing:
+        code = existing.referral_code
+        return JsonResponse({
+            "code": code.code,
+            "discount_percent": code.discount_percent,
+            "status": "already issued",
+        })
+
+    system_user = _wix_system_user()
+
+    with transaction.atomic():
+        now = timezone.now()
+        code = ReferralCode.objects.create(
+            code_type="customer",
+            requested_by=system_user,
+            owner_name=name,
+            owner_email=email,
+            product=product,
+            discount_percent=discount_percent,
+            approval_status="approved",
+            approved_by=system_user,
+            approved_at=now,
+            expires_at=now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS),
+            origin_system="hub",
+        )
+        PurchaseRewardIssuance.objects.create(
+            source_system="wix",
+            external_user_id=user_id,
+            external_order_id=order_id,
+            external_email=email,
+            referral_code=code,
+        )
+        _log("approved", code, system_user,
+             f"Purchase-reward coupon auto-issued for order {order_id} ({mask_email(email)})")
+
+    _sync_approved_code_to_wix(code, system_user)
+
+    return JsonResponse({
+        "code": code.code,
+        "discount_percent": code.discount_percent,
+        "wix_sync_status": code.wix_sync_status,
+        "status": "issued",
+    })
+    
+    
+@csrf_exempt
+@require_http_methods(["POST"])
+def wix_coupon_created_api(request):
+    """
+    POST /careertrek/coupon-created
+    Called when a coupon is created directly on Wix (e.g. as part of a
+    CareerTrek plan purchase) rather than through Referral Hub's own
+    request/approve workflow. Mirrors it into ReferralCode so it shows up
+    in the Hub's dashboards, audit log, and usage tracking.
+
+    Idempotent on wix_coupon_id: replaying the same event updates the
+    existing record instead of creating a duplicate.
+    """
+    if not _check_api_key(request):
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    try:
+        data = json.loads(request.body)
+        wix_coupon_id = str(data["wix_coupon_id"])
+        code_str = data["code"]
+        discount_percent = int(data["discount_percent"])
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return JsonResponse({"error": "invalid payload"}, status=400)
+
+    product = data.get("product", "careertrek")
+    if product not in dict(PRODUCT_CHOICES):
+        return JsonResponse({"error": "invalid product"}, status=400)
+
+    system_user = _wix_system_user()
+    existing = ReferralCode.objects.filter(wix_coupon_id=wix_coupon_id).first()
+
+    if existing is None and ReferralCode.objects.filter(code=code_str).exists():
+        # Code string collision against something already in the Hub —
+        # reject rather than silently overwrite an unrelated code.
+        return JsonResponse({"error": "code already exists in Referral Hub"}, status=409)
+
+    with transaction.atomic():
+        if existing:
+            code = existing
+            created = False
+        else:
+            now = timezone.now()
+            code = ReferralCode(
+                code=code_str,
+                code_type="customer",
+                requested_by=system_user,
+                owner_name=data.get("owner_name", ""),
+                owner_email=data.get("owner_email", ""),
+                product=product,
+                approval_status="approved",
+                approved_by=system_user,
+                approved_at=now,
+                expires_at=now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS),
+                origin_system="wix",
+            )
+            created = True
+
+        code.discount_percent = discount_percent
+        code.wix_coupon_id = wix_coupon_id
+        code.wix_sync_status = "synced"
+        code.wix_sync_error = ""
+        code.wix_last_synced_at = timezone.now()
+        code.save()
+
+        _log(
+            "wix_coupon_synced_in" if created else "wix_coupon_updated_in",
+            code, system_user,
+            f"Coupon {mask_code(code.code)} {'created' if created else 'updated'} from Wix (coupon id {wix_coupon_id})",
+        )
+
+    return JsonResponse({"status": "created" if created else "updated", "code": code.code, "coupon_id": code.id})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def wix_coupon_used_api(request):
+    """
+    POST /careertrek/coupon-used
+    Called after a CareerTrek purchase succeeds with a Referral Hub-managed
+    coupon applied. Records the usage directly as a converted Referral —
+    Wix/CareerTrek is the source of truth that the purchase went through,
+    so this doesn't route through the pending apply_referral_code flow.
+
+    Idempotent on (code, order_id): a retried delivery is a no-op.
+    """
+    if not _check_api_key(request):
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    try:
+        data = json.loads(request.body)
+        code_str = data["code"]
+    except (json.JSONDecodeError, KeyError):
+        return JsonResponse({"error": "invalid payload"}, status=400)
+
+    try:
+        ref_code = ReferralCode.objects.get(code=code_str)
+    except ReferralCode.DoesNotExist:
+        return JsonResponse({"error": "unknown code"}, status=404)
+
+    external_order_id = data.get("order_id", "")
+    customer_email = data.get("customer_email", "")
+    customer_name = data.get("customer_name", "")
+    product = data.get("product", ref_code.product)
+
+    try:
+        with transaction.atomic():
+            referral = Referral.objects.create(
+                referral_code=ref_code,
+                customer_name=customer_name,
+                customer_email=customer_email,
+                product=product,
+                discount_applied=ref_code.discount_percent,
+                status="converted",
+                external_order_id=external_order_id,
+            )
+            _log("redeemed", ref_code, None,
+                 f"Redeemed on CareerTrek by {mask_email(customer_email) if customer_email else 'unknown'} (order {external_order_id or 'n/a'})")
+    except IntegrityError:
+        # Same order_id delivered twice — already recorded, treat as success.
+        return JsonResponse({"status": "already recorded"})
+
+    return JsonResponse({"status": "recorded", "referral_id": referral.id})

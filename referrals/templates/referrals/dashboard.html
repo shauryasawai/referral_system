@@ -1,4 +1,5 @@
 {% extends "referrals/base.html" %}
+{% load referral_extras %}
 {% block title %}Dashboard — Referral Hub{% endblock %}
 {% block body %}
 <div class="page">
@@ -35,15 +36,17 @@
         <button type="submit">Request code</button>
       </form>
       {% if form.product.errors %}<div class="alert alert-error" style="margin-top:10px">{{ form.product.errors.0 }}</div>{% endif %}
-      <p class="subtext">Your code is generated instantly but stays <strong>pending</strong> until an admin approves it. Once approved, it goes live and is usable at checkout. Deactivation is permanent — if a code is deactivated, request a new one here.</p>
+      <p class="subtext">Your code is generated instantly but stays <strong>pending</strong> until an admin approves it. Once approved, it goes live for {{ default_validity_years|default:"3" }} years (unless an admin adjusts the expiry) and is usable at checkout. Deactivation is permanent — if a code is deactivated, request a new one here.</p>
     {% endif %}
   </div>
 
+  <!-- "My requests" — the logged-in user's OWN codes only. Full code + Copy
+       is correct here: this is the "assigned person" view. Never mask this table. -->
   <div class="card">
     <div class="card-head"><h3>My requests</h3></div>
     <div class="table-wrap">
     <table>
-    <tr><th>Code</th><th>Product</th><th>Discount</th><th>Status</th><th>Requested</th><th></th></tr>
+    <tr><th>Code</th><th>Product</th><th>Discount</th><th>Status</th><th>Requested</th><th>Expires</th><th></th></tr>
     {% for c in my_codes %}
     <tr>
       <td>
@@ -56,6 +59,7 @@
       <td>{{ c.discount_percent }}%</td>
       <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
       <td>{{ c.created_at|date:"M d, H:i" }}</td>
+      <td>{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
       <td>
         <div class="btn-row">
           {% if c.approval_status == "pending" %}
@@ -71,7 +75,7 @@
       </td>
     </tr>
     {% empty %}
-    <tr class="empty-row"><td colspan="6">No requests yet — request your first code above.</td></tr>
+    <tr class="empty-row"><td colspan="7">No requests yet — request your first code above.</td></tr>
     {% endfor %}
     </table>
     </div>
@@ -86,6 +90,7 @@
     <div class="stat-card accent-pending"><div class="stat-value">{{ admin_counts.pending }}</div><div class="stat-label">Awaiting Approval</div></div>
     <div class="stat-card accent-live"><div class="stat-value">{{ admin_counts.live }}</div><div class="stat-label">Live</div></div>
     <div class="stat-card accent-deactivated"><div class="stat-value">{{ admin_counts.deactivated }}</div><div class="stat-label">Deactivated</div></div>
+    <div class="stat-card accent-expired"><div class="stat-value">{{ admin_counts.expired }}</div><div class="stat-label">Expired</div></div>
   </div>
 
   <div class="card">
@@ -93,14 +98,14 @@
       <h3>Pending partner requests</h3>
       {% if partner_request_count %}<span class="badge badge-pending">{{ partner_request_count }}</span>{% endif %}
     </div>
-    <div class="panel-note">New signups from Lead Gen Tool waiting to be approved as channel partners. Pick a product to generate their code.</div>
+    <div class="panel-note">New signups from Lead Gen Tool waiting to be approved as channel partners. Pick a product to generate their code. Contact details are shown partially — full details are only delivered to the applicant themselves.</div>
     <div class="table-wrap">
     <table>
     <tr><th>Name</th><th>Email</th><th>Signed up</th><th>Submitted details</th><th>Product</th><th>Action</th></tr>
     {% for r in partner_requests %}
     <tr>
       <td>{{ r.external_name|default:"—" }}</td>
-      <td>{{ r.external_email }}</td>
+      <td>{{ r.external_email|mask_email }}</td>
       <td>{{ r.created_at|date:"M d, H:i" }}</td>
       <td>
         {% if r.application_data %}
@@ -150,13 +155,14 @@
     <div class="panel-note">These were approved and a code was generated, but the webhook back to Lead Gen Tool failed — the user can't see their code yet.</div>
     <div class="table-wrap">
     <table>
-    <tr><th>Code</th><th>Email</th><th>Product</th><th>Approved</th><th></th></tr>
+    <tr><th>Code</th><th>Email</th><th>Product</th><th>Approved</th><th>Expires</th><th></th></tr>
     {% for r in failed_deliveries %}
     <tr>
-      <td><span class="code-chip">{{ r.referral_code.code }}</span></td>
-      <td>{{ r.external_email }}</td>
+      <td><span class="code-chip code-masked" title="Full code visible only to the assigned recipient">{{ r.referral_code.code|mask_code }}</span></td>
+      <td>{{ r.external_email|mask_email }}</td>
       <td>{{ r.get_product_display }}</td>
       <td>{{ r.referral_code.approved_at|date:"M d, H:i" }}</td>
+      <td>{{ r.referral_code.expires_at|date:"M d, Y"|default:"—" }}</td>
       <td>
         <form action="{% url 'retry_partner_delivery' r.id %}" method="post" class="inline-form">
           {% csrf_token %}<button type="submit" class="btn-ghost" style="padding:5px 10px;font-size:12px">Retry delivery</button>
@@ -181,8 +187,8 @@
     <tr><th>Code</th><th>Email</th><th>Product</th><th>Deactivated</th><th></th></tr>
     {% for r in deactivation_failed_deliveries %}
     <tr>
-      <td><span class="code-chip">{{ r.referral_code.code }}</span></td>
-      <td>{{ r.external_email }}</td>
+      <td><span class="code-chip code-masked" title="Full code visible only to the assigned recipient">{{ r.referral_code.code|mask_code }}</span></td>
+      <td>{{ r.external_email|mask_email }}</td>
       <td>{{ r.get_product_display }}</td>
       <td>{{ r.referral_code.deactivated_at|date:"M d, H:i" }}</td>
       <td>
@@ -197,25 +203,25 @@
   </div>
   {% endif %}
 
+  <!-- "All coupons" — every user's codes, visible to admin. Code + owner
+       email are masked; no Copy button (nothing usable is in the DOM). -->
   <div class="card">
     <div class="card-head"><h3>All coupons</h3></div>
-    <div class="panel-note">Every code from every user. Admin can approve, reject, edit, deactivate or permanently delete any code here.</div>
+    <div class="panel-note">Every code from every user, shown partially masked. Only the assigned recipient (via their own dashboard or the Lead Gen delivery) sees the full code.</div>
     <div class="table-wrap">
     <table>
-    <tr><th>Code</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Status</th><th>Requested</th><th>Action</th></tr>
+    <tr><th>Code</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Status</th><th>Requested</th><th>Expires</th><th>Action</th></tr>
     {% for c in all_codes_admin %}
     <tr>
       <td>
-        <div class="code-cell">
-          <span class="code-chip">{{ c.code }}</span>
-          <button type="button" class="copy-btn" data-code="{{ c.code }}" onclick="copyCode(this)">Copy</button>
-        </div>
+        <span class="code-chip code-masked" title="Full code visible only to the assigned recipient">{{ c.code|mask_code }}</span>
       </td>
       <td>{{ c.requested_by }}</td>
       <td>{{ c.get_product_display }}</td>
       <td>{{ c.discount_percent }}%</td>
       <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
       <td>{{ c.created_at|date:"M d, H:i" }}</td>
+      <td>{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
       <td>
         <div class="btn-row">
           {% if c.approval_status == "pending" %}
@@ -224,12 +230,12 @@
             <a href="{% url 'edit_code' c.id %}">Edit</a>
           {% elif c.approval_status == "approved" and c.active %}
             <a href="{% url 'edit_code' c.id %}">Edit</a>
-            <form action="{% url 'deactivate_code' c.id %}" method="post" class="inline-form" onsubmit="return confirm('Deactivate {{ c.code }} permanently?');">
+            <form action="{% url 'deactivate_code' c.id %}" method="post" class="inline-form" onsubmit="return confirm('Deactivate this code permanently?');">
               {% csrf_token %}
               <button type="submit" class="btn-warn" style="padding:5px 10px;font-size:12px">Deactivate</button>
             </form>
           {% endif %}
-          <form action="{% url 'delete_code' c.id %}" method="post" class="inline-form" onsubmit="return confirm('Permanently delete {{ c.code }}? This cannot be undone.');">{% csrf_token %}<button type="submit" class="btn-ghost" style="padding:5px 10px;font-size:12px">Delete</button></form>
+          <form action="{% url 'delete_code' c.id %}" method="post" class="inline-form" onsubmit="return confirm('Permanently delete this code? This cannot be undone.');">{% csrf_token %}<button type="submit" class="btn-ghost" style="padding:5px 10px;font-size:12px">Delete</button></form>
         </div>
       </td>
     </tr>
@@ -246,5 +252,8 @@
   .applicant-detail-row { font-size: 12px; }
   .applicant-detail-label { color: #6c757d; font-weight: 600; margin-right: 4px; }
   .applicant-detail-value { color: #212529; }
+  .code-masked { font-family: monospace; letter-spacing: 1px; opacity: 0.85; cursor: default; }
+  .badge-expired { background: #6c757d; color: #fff; }
+  .accent-expired { border-left-color: #6c757d; }
 </style>
 {% endblock %}

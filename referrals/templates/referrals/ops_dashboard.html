@@ -1,40 +1,53 @@
 {% extends "referrals/base.html" %}
+{% load referral_extras %}
 {% block title %}Ops Dashboard — Referral Hub{% endblock %}
 {% block body %}
 <div class="page">
-  <h1>Ops dashboard <span class="role-badge">Ops</span></h1>
-  <p class="subtext" style="margin-bottom:24px">Admin-approved referral codes, for day-to-day reference. Read-only — deactivated codes stay listed here permanently for the record.</p>
+
+  <h1>Referral Codes — Ops View <span class="role-badge">Ops</span></h1>
+  <p class="subtext" style="margin-bottom:24px">Read-only reference of all approved codes. Codes and owner emails are shown partially masked — only the assigned recipient sees the full value.</p>
+
+  {% if messages %}{% for m in messages %}<div class="alert alert-success">{{ m }}</div>{% endfor %}{% endif %}
 
   <div class="stat-grid">
-    <div class="stat-card accent-live"><div class="stat-value">{{ ops_counts.live }}</div><div class="stat-label">Currently Live</div></div>
+    <div class="stat-card accent-live"><div class="stat-value">{{ ops_counts.live }}</div><div class="stat-label">Live</div></div>
     <div class="stat-card accent-deactivated"><div class="stat-value">{{ ops_counts.deactivated }}</div><div class="stat-label">Deactivated</div></div>
+    <div class="stat-card accent-expired"><div class="stat-value">{{ ops_counts.expired }}</div><div class="stat-label">Expired</div></div>
   </div>
 
   <div class="card">
+    <div class="card-head"><h3>Approved codes</h3></div>
     <div class="table-wrap">
     <table>
-    <tr><th>Code</th><th>Type</th><th>Owner</th><th>Product</th><th>Discount</th><th>Status</th><th>Approved by</th><th>Approved</th></tr>
+    <tr><th>Code</th><th>Owner</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Status</th><th>Approved</th><th>Expires</th></tr>
     {% for c in live_codes %}
     <tr>
       <td>
-        <div class="code-cell">
-          <span class="code-chip">{{ c.code }}</span>
-          <button type="button" class="copy-btn" data-code="{{ c.code }}" onclick="copyCode(this)">Copy</button>
-        </div>
+        <span class="code-chip code-masked" title="Full code visible only to the assigned recipient">{{ c.code|mask_code }}</span>
       </td>
-      <td>{{ c.get_code_type_display }}</td>
-      <td>{{ c.owner_name }}</td>
+      <td>
+        {{ c.owner_name|default:"—" }}<br>
+        <span class="subtext">{{ c.owner_email|mask_email }}</span>
+      </td>
+      <td>{{ c.requested_by }}</td>
       <td>{{ c.get_product_display }}</td>
       <td>{{ c.discount_percent }}%</td>
       <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
-      <td>{{ c.approved_by }}</td>
       <td>{{ c.approved_at|date:"M d, H:i" }}</td>
+      <td>{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
     </tr>
     {% empty %}
-    <tr class="empty-row"><td colspan="8">No approved codes yet — approved codes will appear here.</td></tr>
+    <tr class="empty-row"><td colspan="8">No approved codes yet.</td></tr>
     {% endfor %}
     </table>
     </div>
   </div>
+
 </div>
+
+<style>
+  .code-masked { font-family: monospace; letter-spacing: 1px; opacity: 0.85; cursor: default; }
+  .badge-expired { background: #6c757d; color: #fff; }
+  .accent-expired { border-left-color: #6c757d; }
+</style>
 {% endblock %}

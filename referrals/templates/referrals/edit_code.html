@@ -1,27 +1,48 @@
 {% extends "referrals/base.html" %}
-{% block title %}Edit Code — Referral Hub{% endblock %}
+{% block title %}Edit {{ code.code }} — Referral Hub{% endblock %}
 {% block body %}
-<div class="page-narrow">
-  <div class="card">
-    <div class="card-head">
-      <h2>Edit referral code</h2>
-      <p class="subtext">{{ code.get_product_display }} &middot; <span class="badge badge-{{ code.display_status }}">{{ code.display_status_label }}</span></p>
-    </div>
-    {% if form.errors %}
-      {% for field in form %}{% for error in field.errors %}<div class="alert alert-error">{{ error }}</div>{% endfor %}{% endfor %}
+<div class="page">
+
+  <h1>Edit Code</h1>
+  <p class="subtext" style="margin-bottom:24px">
+    {% if request.user.is_staff %}
+      As an admin, you can rename the code, adjust the discount, and change its expiry date.
+    {% else %}
+      You can adjust the discount while this code is still pending. Once approved, only an admin can make changes.
     {% endif %}
-    <form method="post">
+  </p>
+
+  <div class="card">
+    <form method="post" class="form-stack">
       {% csrf_token %}
-      <label for="id_code">Code</label>
-      {{ form.code }}
-      {% if not request.user.is_staff %}<p class="subtext" style="margin-top:2px">Only an admin can change the code itself.</p>{% endif %}
-      <label for="id_discount_percent">Discount %</label>
-      {{ form.discount_percent }}
-      <div class="btn-row" style="margin-top:20px">
-        <button type="submit">Save changes</button>
-        <a href="{% url 'user_dashboard' %}" class="btn-ghost btn">Cancel</a>
+
+      <div class="form-row">
+        <label for="{{ form.code.id_for_label }}">Code</label>
+        {{ form.code }}
+        {% if form.code.errors %}<div class="alert alert-error">{{ form.code.errors.0 }}</div>{% endif %}
+        {% if not request.user.is_staff %}<p class="subtext">Only an admin can rename a code.</p>{% endif %}
+      </div>
+
+      <div class="form-row">
+        <label for="{{ form.discount_percent.id_for_label }}">Discount %</label>
+        {{ form.discount_percent }}
+        {% if form.discount_percent.errors %}<div class="alert alert-error">{{ form.discount_percent.errors.0 }}</div>{% endif %}
+      </div>
+
+      <div class="form-row">
+        <label for="{{ form.expires_at.id_for_label }}">Expires on</label>
+        {{ form.expires_at }}
+        {% if form.expires_at.help_text %}<p class="subtext">{{ form.expires_at.help_text }}</p>{% endif %}
+        {% if form.expires_at.errors %}<div class="alert alert-error">{{ form.expires_at.errors.0 }}</div>{% endif %}
+        {% if not request.user.is_staff %}<p class="subtext">Only an admin can change the expiry date.</p>{% endif %}
+      </div>
+
+      <div class="btn-row">
+        <button type="submit" class="btn-approve">Save changes</button>
+        <a href="{% url 'user_dashboard' %}" class="btn-ghost">Cancel</a>
       </div>
     </form>
   </div>
+
 </div>
 {% endblock %}

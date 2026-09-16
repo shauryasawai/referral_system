@@ -1,33 +1,53 @@
 {% extends "referrals/base.html" %}
+{% load referral_extras %}
 {% block title %}Audit Log — Referral Hub{% endblock %}
 {% block body %}
 <div class="page">
-  <h1>Audit log <span class="role-badge">Admin</span></h1>
-  <p class="subtext" style="margin-bottom:24px">Every operation on every code, in order, for dispute investigation. This record cannot be edited or deleted by anyone.</p>
 
-  <form method="get" class="search-box toolbar">
-    <input type="text" name="q" placeholder="Search by code or username" value="{{ q }}">
-    <button type="submit">Search</button>
-  </form>
+  <h1>Audit Log <span class="role-badge">Admin</span></h1>
+  <p class="subtext" style="margin-bottom:24px">Full immutable history of every state change, for dispute investigation. Codes shown here are partially masked for display; the underlying record retains the full value for investigation purposes only.</p>
+
+  {% if messages %}{% for m in messages %}<div class="alert alert-success">{{ m }}</div>{% endfor %}{% endif %}
 
   <div class="card">
+    <div class="card-head"><h3>Search</h3></div>
+    <form method="get" class="toolbar">
+      <input type="text" name="q" value="{{ q }}" placeholder="Search by code or actor username">
+      <button type="submit">Search</button>
+      {% if q %}<a href="{% url 'audit_log' %}" class="btn-ghost">Clear</a>{% endif %}
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h3>Entries</h3>
+      <span class="subtext">Showing up to 300 most recent{% if q %} matching "{{ q }}"{% endif %}</span>
+    </div>
     <div class="table-wrap">
     <table>
-    <tr><th>Time</th><th>Code</th><th>Action</th><th>Performed by</th><th>Details</th></tr>
+    <tr><th>When</th><th>Action</th><th>Code</th><th>Actor</th><th>Details</th></tr>
     {% for e in entries %}
     <tr>
-      <td>{{ e.timestamp|date:"M d, Y H:i:s" }}</td>
-      <td><span class="code-chip">{{ e.code_snapshot }}</span></td>
-      <td>{{ e.get_action_display }}</td>
-      <td>{{ e.actor|default:"System / Public checkout" }}</td>
-      <td>{{ e.details|default:"—" }}</td>
+      <td>{{ e.created_at|date:"M d, H:i:s" }}</td>
+      <td><span class="badge badge-pending">{{ e.action }}</span></td>
+      <td>
+        <span class="code-chip code-masked" title="Full code visible only to the assigned recipient">
+          {{ e.code_snapshot|mask_code }}
+        </span>
+      </td>
+      <td>{{ e.actor.username|default:"system" }}</td>
+      <td class="subtext">{{ e.details|default:"—" }}</td>
     </tr>
     {% empty %}
-    <tr class="empty-row"><td colspan="5">No audit entries match your search.</td></tr>
+    <tr class="empty-row"><td colspan="5">No matching entries.</td></tr>
     {% endfor %}
     </table>
     </div>
   </div>
-  <p class="subtext">Showing the most recent 300 entries{% if q %} matching "{{ q }}"{% endif %}.</p>
+
 </div>
+
+<style>
+  .code-masked { font-family: monospace; letter-spacing: 1px; opacity: 0.85; cursor: default; }
+</style>
 {% endblock %}

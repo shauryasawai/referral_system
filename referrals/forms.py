@@ -25,6 +25,11 @@ class RequestCodeForm(forms.Form):
 class EditCodeForm(forms.Form):
     code = forms.CharField(max_length=30)
     discount_percent = forms.IntegerField(min_value=0, max_value=100)
+    expires_at = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        help_text="Leave blank for a code that never expires.",
+    )
 
     def __init__(self, *args, instance=None, allow_code_edit=False, **kwargs):
         self.instance = instance
@@ -32,6 +37,9 @@ class EditCodeForm(forms.Form):
         super().__init__(*args, **kwargs)
         if not allow_code_edit:
             self.fields["code"].disabled = True
+            # Expiry is admin-only, same gate as renaming the code itself —
+            # owners can adjust discount only while their code is pending.
+            self.fields["expires_at"].disabled = True
 
     def clean_code(self):
         value = self.cleaned_data["code"].strip().upper()
