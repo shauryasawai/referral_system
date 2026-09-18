@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# KareerTrek / Wix integration tests
+# Kareertrek / Wix integration tests
 # ---------------------------------------------------------------------------
 import json
 from django.test import override_settings
