@@ -1,21 +1,37 @@
 {% extends "referrals/base.html" %}
+
 {% block title %}Login — Referral Hub{% endblock %}
+
 {% block body %}
 <div class="page-narrow">
-  <div class="brand" style="justify-content:center;margin-bottom:24px"><span class="brand-mark">R</span> Referral Hub</div>
+  <div class="brand" style="justify-content:center;margin-bottom:24px">
+    <span class="brand-mark">R</span> Referral Hub
+  </div>
+
   <div class="card">
     <div class="card-head">
       <h2>Sign in</h2>
       <p class="subtext">Access your referral code dashboard.</p>
     </div>
-    {% if form.errors %}<div class="alert alert-error">Incorrect username or password.</div>{% endif %}
+
+    {% if form.errors %}
+      <div class="alert alert-error">
+        Incorrect username or password.
+      </div>
+    {% endif %}
+
     <form method="post">
       {% csrf_token %}
+
       <label for="id_username">Username</label>
       <input type="text" name="username" id="id_username" required autofocus>
+
       <label for="id_password">Password</label>
       <input type="password" name="password" id="id_password" required>
-      <button type="submit" style="width:100%;margin-top:20px">Sign in</button>
+
+      <button type="submit" style="width:100%;margin-top:20px">
+        Sign in
+      </button>
     </form>
   </div>
 </div>
