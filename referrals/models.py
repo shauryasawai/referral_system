@@ -7,7 +7,7 @@ from django.db import models
 from django.utils import timezone
 
 PRODUCT_CHOICES = [
-    ("careertrek", "CareerTrek"),
+    ("kareertrek", "KareerTrek"),
     ("marketscope", "Marketscope"),
     ("recruitscope", "Recruit Scope"),
 ]
@@ -46,7 +46,7 @@ AUDIT_ACTION_CHOICES = [
 ]
 ORIGIN_SYSTEM_CHOICES = [
     ("hub", "Referral Hub"),
-    ("wix", "Wix / CareerTrek"),
+    ("wix", "Wix / KareerTrek"),
 ]
 
 # Wix sync status, tracked per-code so failures are visible instead of silent.
@@ -115,8 +115,8 @@ class ReferralCode(models.Model):
                    "from approval; admins can extend or shorten it.",
     )
 
-    # --- Wix Studio (CareerTrek) coupon sync -------------------------------
-    # Only populated for product == "careertrek". wix_coupon_id lets us target
+    # --- Wix Studio (KareerTrek) coupon sync -------------------------------
+    # Only populated for product == "kareertrek". wix_coupon_id lets us target
     # the exact same Wix coupon on later actions (disable) rather than
     # re-deriving it. Sync failures never block the Django-side action; they
     # are recorded here and in AuditLog so an admin can retry/investigate.
@@ -267,7 +267,7 @@ class PartnerOnboardingRequest(models.Model):
 
 class PurchaseRewardIssuance(models.Model):
     """
-    Links a completed CareerTrek purchase to the reward ReferralCode issued
+    Links a completed KareerTrek purchase to the reward ReferralCode issued
     for it. Prevents the same purchase (same order_id) from generating a
     second reward coupon if the Wix Automation retries or fires twice.
     """

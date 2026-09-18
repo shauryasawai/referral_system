@@ -37,7 +37,7 @@ urlpatterns = [
     path("referral/my-usage", views.my_usage_api, name="api_my_usage"),
     path("referral/partner-request", views.partner_request_api, name="api_partner_request"),
     path("referral/partner-request/status", views.partner_request_status_api, name="api_partner_request_status"),
-    path("careertrek/coupon-created", views.wix_coupon_created_api, name="api_wix_coupon_created"),
-    path("careertrek/coupon-used", views.wix_coupon_used_api, name="api_wix_coupon_used"),
-    path("careertrek/purchase-reward-coupon", views.issue_purchase_reward_coupon_api, name="api_purchase_reward_coupon"),
+    path("kareertrek/coupon-created", views.wix_coupon_created_api, name="api_wix_coupon_created"),
+    path("kareertrek/coupon-used", views.wix_coupon_used_api, name="api_wix_coupon_used"),
+    path("kareertrek/purchase-reward-coupon", views.issue_purchase_reward_coupon_api, name="api_purchase_reward_coupon"),
 ]

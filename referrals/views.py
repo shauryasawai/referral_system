@@ -68,7 +68,7 @@ def _allowed_products(user):
 
 def _sync_approved_code_to_wix(code, actor):
     """
-    Push a newly-approved code to Wix as a live coupon (CareerTrek only — see
+    Push a newly-approved code to Wix as a live coupon (KareerTrek only — see
     wix_sync.should_sync). Never blocks or rolls back the approval: this runs
     after the code is already committed as approved. Failures are recorded on
     the code itself and in the audit log so an admin can see and retry them.
@@ -131,7 +131,7 @@ def _leadgen_system_user():
 def _wix_system_user():
     """
     Service account used to attribute ReferralCodes and Referrals that
-    originate on Wix's side (coupon created during a CareerTrek purchase,
+    originate on Wix's side (coupon created during a KareerTrek purchase,
     or a usage event) rather than through the admin UI. is_active=False so
     it can never be used to log in.
     """
@@ -226,7 +226,7 @@ def approve_code(request, code_id):
         messages.warning(
             request,
             f"{code.code} approved and live, but syncing to Wix failed: {code.wix_sync_error} "
-            f"— it will not show in CareerTrek's coupons until this is retried.",
+            f"— it will not show in KareerTrek's coupons until this is retried.",
         )
     else:
         messages.success(request, f"{code.code} approved and live.")
@@ -356,7 +356,7 @@ def deactivate_code(request, code_id):
         messages.warning(
             request,
             f"{code.code} deactivated here, but disabling the matching Wix coupon failed: "
-            f"{code.wix_sync_error} — it may still be redeemable on CareerTrek until this is retried.",
+            f"{code.wix_sync_error} — it may still be redeemable on KareerTrek until this is retried.",
         )
     else:
         messages.success(request, f"{code.code} deactivated permanently. Request a new code if you need one.")
@@ -962,9 +962,9 @@ def _notify_leadgen_of_deactivation(code, actor):
                  "Deactivation notice to Lead Gen Tool failed for starter coupon")
         
 # ---------------------------------------------------------------------------
-# CareerTrek / Wix integration — inbound APIs for coupons created directly
+# KareerTrek / Wix integration — inbound APIs for coupons created directly
 # on Wix (not through Referral Hub's own approval flow) and for usage
-# events from purchases made on CareerTrek. Server-to-server, same
+# events from purchases made on KareerTrek. Server-to-server, same
 # X-Internal-Api-Key auth as the Lead Gen integration.
 # ---------------------------------------------------------------------------
 @csrf_exempt
@@ -1051,9 +1051,9 @@ def issue_purchase_reward_coupon_api(request):
 @require_http_methods(["POST"])
 def wix_coupon_created_api(request):
     """
-    POST /careertrek/coupon-created
+    POST /kareertrek/coupon-created
     Called when a coupon is created directly on Wix (e.g. as part of a
-    CareerTrek plan purchase) rather than through Referral Hub's own
+    KareerTrek plan purchase) rather than through Referral Hub's own
     request/approve workflow. Mirrors it into ReferralCode so it shows up
     in the Hub's dashboards, audit log, and usage tracking.
 
@@ -1125,9 +1125,9 @@ def wix_coupon_created_api(request):
 def wix_coupon_used_api(request):
     """
     POST /careertrek/coupon-used
-    Called after a CareerTrek purchase succeeds with a Referral Hub-managed
+    Called after a KareerTrek purchase succeeds with a Referral Hub-managed
     coupon applied. Records the usage directly as a converted Referral —
-    Wix/CareerTrek is the source of truth that the purchase went through,
+    Wix/KareerTrek is the source of truth that the purchase went through,
     so this doesn't route through the pending apply_referral_code flow.
 
     Idempotent on (code, order_id): a retried delivery is a no-op.
@@ -1163,7 +1163,7 @@ def wix_coupon_used_api(request):
                 external_order_id=external_order_id,
             )
             _log("redeemed", ref_code, None,
-                 f"Redeemed on CareerTrek by {mask_email(customer_email) if customer_email else 'unknown'} (order {external_order_id or 'n/a'})")
+                 f"Redeemed on KareerTrek by {mask_email(customer_email) if customer_email else 'unknown'} (order {external_order_id or 'n/a'})")
     except IntegrityError:
         # Same order_id delivered twice — already recorded, treat as success.
         return JsonResponse({"status": "already recorded"})
