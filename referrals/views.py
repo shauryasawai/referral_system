@@ -709,7 +709,7 @@ def request_starter_coupon_api(request):
 
     email = data.get("email", "")
     name = data.get("name", "")
-    product = data.get("product", "careertrek")  # default product for starter coupons
+    product = data.get("product", "kareertrek")  # default product for starter coupons
 
     if product not in dict(PRODUCT_CHOICES):
         return JsonResponse({"error": "invalid product"}, status=400)
@@ -993,7 +993,7 @@ def issue_purchase_reward_coupon_api(request):
 
     email = data.get("email", "")
     name = data.get("name", "")
-    product = data.get("product", "careertrek")
+    product = data.get("product", "kareertrek")
     discount_percent = int(data.get("discount_percent", DEFAULT_CUSTOMER_DISCOUNT))
 
     if product not in dict(PRODUCT_CHOICES):
@@ -1071,7 +1071,7 @@ def wix_coupon_created_api(request):
     except (json.JSONDecodeError, KeyError, ValueError):
         return JsonResponse({"error": "invalid payload"}, status=400)
 
-    product = data.get("product", "careertrek")
+    product = data.get("product", "kareertrek")
     if product not in dict(PRODUCT_CHOICES):
         return JsonResponse({"error": "invalid product"}, status=400)
 
