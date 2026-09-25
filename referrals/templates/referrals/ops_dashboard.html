@@ -32,21 +32,20 @@
       <td>{{ c.requested_by }}</td>
       <td>{{ c.get_product_display }}</td>
       <td>{{ c.discount_percent }}%</td>
-      <td>
+      <td class="nowrap-cell">
         {% if c.origin_system == "wix" %}
-          <span class="badge badge-wix">Wix</span>
           {% if c.purchase_reward %}
-            <div class="subtext">Order {{ c.purchase_reward.external_order_id }}</div>
+            <span class="badge badge-wix" title="Order {{ c.purchase_reward.external_order_id }}">Wix</span>
           {% else %}
-            <div class="subtext">Manual Wix coupon</div>
+            <span class="badge badge-wix" title="Manual Wix coupon (not tied to a purchase)">Wix</span>
           {% endif %}
         {% else %}
           <span class="badge badge-hub">Hub</span>
         {% endif %}
       </td>
-      <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
-      <td>{{ c.approved_at|date:"M d, H:i" }}</td>
-      <td>{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
+      <td class="nowrap-cell"><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
+      <td class="nowrap-cell">{{ c.approved_at|date:"M d, H:i" }}</td>
+      <td class="nowrap-cell">{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
     </tr>
     {% empty %}
     <tr class="empty-row"><td colspan="9">No approved codes yet.</td></tr>
@@ -63,5 +62,13 @@
   .accent-expired { border-left-color: #6c757d; }
   .badge-wix { background: #0d6efd; color: #fff; }
   .badge-hub { background: #6c757d; color: #fff; }
+
+  .nowrap-cell {
+    white-space: nowrap;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+  }
 </style>
 {% endblock %}

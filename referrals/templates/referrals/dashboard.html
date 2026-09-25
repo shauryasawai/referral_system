@@ -57,9 +57,9 @@
       </td>
       <td>{{ c.get_product_display }}</td>
       <td>{{ c.discount_percent }}%</td>
-      <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
-      <td>{{ c.created_at|date:"M d, H:i" }}</td>
-      <td>{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
+      <td class="nowrap-cell"><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
+      <td class="nowrap-cell">{{ c.created_at|date:"M d, H:i" }}</td>
+      <td class="nowrap-cell">{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
       <td>
         <div class="btn-row">
           {% if c.approval_status == "pending" %}
@@ -161,8 +161,8 @@
       <td><span class="code-chip code-masked" title="Full code visible only to the assigned recipient">{{ r.referral_code.code|mask_code }}</span></td>
       <td>{{ r.external_email|mask_email }}</td>
       <td>{{ r.get_product_display }}</td>
-      <td>{{ r.referral_code.approved_at|date:"M d, H:i" }}</td>
-      <td>{{ r.referral_code.expires_at|date:"M d, Y"|default:"—" }}</td>
+      <td class="nowrap-cell">{{ r.referral_code.approved_at|date:"M d, H:i" }}</td>
+      <td class="nowrap-cell">{{ r.referral_code.expires_at|date:"M d, Y"|default:"—" }}</td>
       <td>
         <form action="{% url 'retry_partner_delivery' r.id %}" method="post" class="inline-form">
           {% csrf_token %}<button type="submit" class="btn-ghost" style="padding:5px 10px;font-size:12px">Retry delivery</button>
@@ -195,24 +195,20 @@
       <td>{{ c.requested_by }}</td>
       <td>{{ c.get_product_display }}</td>
       <td>{{ c.discount_percent }}%</td>
-      <td>
+      <td class="nowrap-cell">
         {% if c.origin_system == "wix" %}
-          <span class="badge badge-wix">Wix</span>
           {% if c.purchase_reward %}
-            <div class="subtext">
-              Order {{ c.purchase_reward.external_order_id }}<br>
-              {{ c.purchase_reward.external_email|mask_email }}
-            </div>
+            <span class="badge badge-wix" title="Order {{ c.purchase_reward.external_order_id }} · {{ c.purchase_reward.external_email|mask_email }}">Wix</span>
           {% else %}
-            <div class="subtext">Manual Wix coupon</div>
+            <span class="badge badge-wix" title="Manual Wix coupon (not tied to a purchase)">Wix</span>
           {% endif %}
         {% else %}
           <span class="badge badge-hub">Hub</span>
         {% endif %}
       </td>
-      <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
-      <td>{{ c.created_at|date:"M d, H:i" }}</td>
-      <td>{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
+      <td class="nowrap-cell"><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
+      <td class="nowrap-cell">{{ c.created_at|date:"M d, H:i" }}</td>
+      <td class="nowrap-cell">{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
       <td>
         <div class="btn-row">
           {% if c.approval_status == "pending" %}
@@ -250,5 +246,39 @@
   .accent-expired { border-left-color: #6c757d; }
   .badge-wix { background: #0d6efd; color: #fff; }
   .badge-hub { background: #6c757d; color: #fff; }
+
+  /* Force the action column into a compact, wrapping row of buttons
+     rather than stacking each form/link on its own full line — <form>
+     is block-level by default, so without this every action in .btn-row
+     drops to a new line regardless of what base.html defines. */
+  .btn-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-row .inline-form,
+  .btn-row form {
+    display: inline-flex;
+    margin: 0;
+  }
+  .btn-row a {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+  }
+
+  /* Keep dates, badges, and the Origin column on one line each so a
+     handful of wide columns don't force every other column to squeeze
+     and wrap awkwardly. The table itself still scrolls horizontally
+     within .table-wrap on narrow screens, which is expected for an
+     admin table with this many columns. */
+  .nowrap-cell {
+    white-space: nowrap;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+  }
 </style>
 {% endblock %}
