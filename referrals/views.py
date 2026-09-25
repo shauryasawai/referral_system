@@ -808,6 +808,96 @@ def request_starter_coupon_api(request):
 
 
 @csrf_exempt
+@require_http_methods(["POST"])
+def regenerate_starter_coupon_api(request):
+    """
+    POST /referral/regenerate-coupon
+    Explicit user-initiated replacement of a coupon that may still be
+    live — distinct from request_starter_coupon_api, which is idempotent
+    by design and refuses to touch a code that's still working. This one
+    always deactivates whatever's currently linked (if it's still live)
+    and mints a brand-new code in its place, so a user can voluntarily
+    rotate their coupon (it leaked, they just want a fresh one) without
+    needing an admin to deactivate the old one first.
+    """
+    if not _check_api_key(request):
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    try:
+        data = json.loads(request.body)
+        user_id = str(data["user_id"])
+    except (json.JSONDecodeError, KeyError):
+        return JsonResponse({"error": "invalid payload"}, status=400)
+
+    email = data.get("email", "")
+    name = data.get("name", "")
+    product = data.get("product", "kareertrek")
+
+    if product not in dict(PRODUCT_CHOICES):
+        return JsonResponse({"error": "invalid product"}, status=400)
+
+    existing = StarterCouponIssuance.objects.filter(
+        source_system="leadgen", external_user_id=user_id
+    ).select_related("referral_code").first()
+
+    system_user = _leadgen_system_user()
+    old_code = None
+
+    with transaction.atomic():
+        if existing and existing.referral_code.is_live:
+            old_code = existing.referral_code
+            old_code.active = False
+            old_code.deactivated_at = timezone.now()
+            old_code.save(update_fields=["active", "deactivated_at"])
+            _log("deactivated", old_code, system_user,
+                 f"Deactivated for regeneration (Lead Gen user {user_id})")
+
+        now = timezone.now()
+        code = ReferralCode.objects.create(
+            code_type="customer",
+            requested_by=system_user,
+            owner_name=name,
+            owner_email=email,
+            product=product,
+            discount_percent=DEFAULT_CUSTOMER_DISCOUNT,
+            approval_status="approved",
+            approved_by=system_user,
+            approved_at=now,
+            expires_at=now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS),
+        )
+        if existing:
+            existing.referral_code = code
+            existing.external_email = email
+            existing.deactivation_delivered = False
+            existing.save(update_fields=["referral_code", "external_email", "deactivation_delivered"])
+        else:
+            StarterCouponIssuance.objects.create(
+                source_system="leadgen",
+                external_user_id=user_id,
+                external_email=email,
+                referral_code=code,
+            )
+        _log("approved", code, system_user,
+             f"Starter coupon regenerated for Lead Gen user {user_id} ({mask_email(email)})")
+
+    # Wix syncs happen after the transaction commits, same pattern as every
+    # other approve/deactivate path — a Wix outage on either call must never
+    # roll back the DB state that's already been committed.
+    if old_code is not None:
+        _sync_deactivated_code_to_wix(old_code, system_user)
+    _sync_approved_code_to_wix(code, system_user)
+
+    return JsonResponse({
+        "owner_id": user_id,
+        "coupon_id": code.id,
+        "code": code.code,
+        "discount_percent": code.discount_percent,
+        "applicable_products": [code.product],
+        "valid_until": code.expires_at.date().isoformat() if code.expires_at else None,
+    })
+
+
+@csrf_exempt
 @require_http_methods(["GET"])
 def my_coupon_api(request):
     """GET /referral/my-coupon?user_id=... — used by Lead Gen to (re)sync
@@ -827,14 +917,21 @@ def my_coupon_api(request):
         return JsonResponse({"error": "not found"}, status=404)
 
     code = issuance.referral_code
+    # display_status distinguishes "deactivated" from "expired" — the
+    # previous "active" if is_live else "expired" check collapsed both
+    # into "expired", so a deactivated coupon was misreported to Lead Gen
+    # as merely expired. approval_status is always "approved" for starter
+    # coupons (see request_starter_coupon_api), so display_status here is
+    # one of "approved" (still live), "deactivated", or "expired".
+    status_map = {"approved": "active", "deactivated": "deactivated", "expired": "expired"}
     return JsonResponse({
         "owner_id": user_id,
         "coupon_id": code.id,
         "code": code.code,
         "discount_percent": code.discount_percent,
         "applicable_products": [code.product],
-        "valid_until": None,
-        "status": "active" if code.is_live else "expired",
+        "valid_until": code.expires_at.date().isoformat() if code.expires_at else None,
+        "status": status_map.get(code.display_status, code.display_status),
     })
 
 
