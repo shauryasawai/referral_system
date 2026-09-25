@@ -37,7 +37,7 @@ WIX_API_BASE = "https://www.wixapis.com"
 COUPONS_ENDPOINT = f"{WIX_API_BASE}/stores/v2/coupons"
 
 # Only these products are actually hosted on Wix Studio today.
-WIX_SYNCED_PRODUCTS = {"careertrek"}
+WIX_SYNCED_PRODUCTS = {"kareertrek"}
 
 # Which Wix business solution CareerTrek's checkout actually uses. Confirmed
 # via a real checkout test: CareerTrek sells via Wix PRICING PLANS

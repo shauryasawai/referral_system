@@ -175,42 +175,18 @@
   </div>
   {% endif %}
 
-  {% if deactivation_failed_deliveries %}
-  <div class="card">
-    <div class="card-head">
-      <h3>Deactivated but not synced to Lead Gen</h3>
-      <span class="badge badge-deactivated">{{ deactivation_failed_deliveries|length }}</span>
-    </div>
-    <div class="panel-note">These codes were deactivated here, but the notice to Lead Gen Tool failed — the partner may still see their code as active there.</div>
-    <div class="table-wrap">
-    <table>
-    <tr><th>Code</th><th>Email</th><th>Product</th><th>Deactivated</th><th></th></tr>
-    {% for r in deactivation_failed_deliveries %}
-    <tr>
-      <td><span class="code-chip code-masked" title="Full code visible only to the assigned recipient">{{ r.referral_code.code|mask_code }}</span></td>
-      <td>{{ r.external_email|mask_email }}</td>
-      <td>{{ r.get_product_display }}</td>
-      <td>{{ r.referral_code.deactivated_at|date:"M d, H:i" }}</td>
-      <td>
-        <form action="{% url 'retry_partner_deactivation' r.id %}" method="post" class="inline-form">
-          {% csrf_token %}<button type="submit" class="btn-ghost" style="padding:5px 10px;font-size:12px">Retry sync</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-    </table>
-    </div>
-  </div>
-  {% endif %}
-
   <!-- "All coupons" — every user's codes, visible to admin. Code + owner
-       email are masked; no Copy button (nothing usable is in the DOM). -->
+       email are masked; no Copy button (nothing usable is in the DOM).
+       Origin column distinguishes codes requested through the Hub from
+       those minted on Wix (manual coupons, or the automatic purchase-reward
+       coupon from the "Plan ordered" automation) — the latter show the
+       order/buyer that earned them, via PurchaseRewardIssuance. -->
   <div class="card">
     <div class="card-head"><h3>All coupons</h3></div>
     <div class="panel-note">Every code from every user, shown partially masked. Only the assigned recipient (via their own dashboard or the Lead Gen delivery) sees the full code.</div>
     <div class="table-wrap">
     <table>
-    <tr><th>Code</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Status</th><th>Requested</th><th>Expires</th><th>Action</th></tr>
+    <tr><th>Code</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Origin</th><th>Status</th><th>Requested</th><th>Expires</th><th>Action</th></tr>
     {% for c in all_codes_admin %}
     <tr>
       <td>
@@ -219,6 +195,21 @@
       <td>{{ c.requested_by }}</td>
       <td>{{ c.get_product_display }}</td>
       <td>{{ c.discount_percent }}%</td>
+      <td>
+        {% if c.origin_system == "wix" %}
+          <span class="badge badge-wix">Wix</span>
+          {% if c.purchase_reward %}
+            <div class="subtext">
+              Order {{ c.purchase_reward.external_order_id }}<br>
+              {{ c.purchase_reward.external_email|mask_email }}
+            </div>
+          {% else %}
+            <div class="subtext">Manual Wix coupon</div>
+          {% endif %}
+        {% else %}
+          <span class="badge badge-hub">Hub</span>
+        {% endif %}
+      </td>
       <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
       <td>{{ c.created_at|date:"M d, H:i" }}</td>
       <td>{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
@@ -239,6 +230,8 @@
         </div>
       </td>
     </tr>
+    {% empty %}
+    <tr class="empty-row"><td colspan="9">No requests yet — request your first code above.</td></tr>
     {% endfor %}
     </table>
     </div>
@@ -255,5 +248,7 @@
   .code-masked { font-family: monospace; letter-spacing: 1px; opacity: 0.85; cursor: default; }
   .badge-expired { background: #6c757d; color: #fff; }
   .accent-expired { border-left-color: #6c757d; }
+  .badge-wix { background: #0d6efd; color: #fff; }
+  .badge-hub { background: #6c757d; color: #fff; }
 </style>
 {% endblock %}

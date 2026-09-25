@@ -19,7 +19,7 @@
     <div class="card-head"><h3>Approved codes</h3></div>
     <div class="table-wrap">
     <table>
-    <tr><th>Code</th><th>Owner</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Status</th><th>Approved</th><th>Expires</th></tr>
+    <tr><th>Code</th><th>Owner</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Origin</th><th>Status</th><th>Approved</th><th>Expires</th></tr>
     {% for c in live_codes %}
     <tr>
       <td>
@@ -32,12 +32,24 @@
       <td>{{ c.requested_by }}</td>
       <td>{{ c.get_product_display }}</td>
       <td>{{ c.discount_percent }}%</td>
+      <td>
+        {% if c.origin_system == "wix" %}
+          <span class="badge badge-wix">Wix</span>
+          {% if c.purchase_reward %}
+            <div class="subtext">Order {{ c.purchase_reward.external_order_id }}</div>
+          {% else %}
+            <div class="subtext">Manual Wix coupon</div>
+          {% endif %}
+        {% else %}
+          <span class="badge badge-hub">Hub</span>
+        {% endif %}
+      </td>
       <td><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
       <td>{{ c.approved_at|date:"M d, H:i" }}</td>
       <td>{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
     </tr>
     {% empty %}
-    <tr class="empty-row"><td colspan="8">No approved codes yet.</td></tr>
+    <tr class="empty-row"><td colspan="9">No approved codes yet.</td></tr>
     {% endfor %}
     </table>
     </div>
@@ -49,5 +61,7 @@
   .code-masked { font-family: monospace; letter-spacing: 1px; opacity: 0.85; cursor: default; }
   .badge-expired { background: #6c757d; color: #fff; }
   .accent-expired { border-left-color: #6c757d; }
+  .badge-wix { background: #0d6efd; color: #fff; }
+  .badge-hub { background: #6c757d; color: #fff; }
 </style>
 {% endblock %}

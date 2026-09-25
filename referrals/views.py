@@ -13,7 +13,6 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from django.http import JsonResponse
 from django.conf import settings
 import json
 from . import wix_sync
@@ -64,6 +63,23 @@ def _allowed_products(user):
         return user.access.allowed_products
     except UserAccess.DoesNotExist:
         return [c[0] for c in PRODUCT_CHOICES]
+
+
+def _attach_purchase_rewards(codes):
+    """
+    Attach a `.purchase_reward` attribute (a PurchaseRewardIssuance or None)
+    to each ReferralCode in `codes`, so templates can show the order/buyer
+    that earned a Wix-minted reward coupon without a per-row query.
+    `codes` must be a concrete list (not a lazy queryset) — callers materialize
+    it with list() before passing it in.
+    """
+    reward_by_code_id = {
+        pri.referral_code_id: pri
+        for pri in PurchaseRewardIssuance.objects.filter(referral_code__in=codes)
+    }
+    for c in codes:
+        c.purchase_reward = reward_by_code_id.get(c.id)
+    return codes
 
 
 def _sync_approved_code_to_wix(code, actor):
@@ -184,8 +200,15 @@ def user_dashboard(request):
 
     if request.user.is_staff:
         all_codes = ReferralCode.objects.select_related("requested_by", "approved_by")
-        context["all_codes_admin"] = all_codes
         context["admin_counts"] = _code_counts(all_codes)
+
+        # Materialize so each code can carry its linked PurchaseRewardIssuance
+        # (order id, buyer) for coupons minted automatically by the Wix
+        # "Plan ordered" automation — the dashboard's only view into which
+        # purchase earned a given reward coupon.
+        all_codes_admin = _attach_purchase_rewards(list(all_codes))
+        context["all_codes_admin"] = all_codes_admin
+
         partner_requests = PartnerOnboardingRequest.objects.filter(status="pending").order_by("created_at")
         context["partner_requests"] = partner_requests
         context["partner_request_count"] = partner_requests.count()
@@ -313,28 +336,6 @@ def edit_code(request, code_id):
     return render(request, "referrals/edit_code.html", {"code": code, "form": form, "is_ops": _in_group(request.user, "Ops")})
 
 
-def _notify_leadgen_of_deactivation(code, actor):
-    """Called after a code is deactivated. Figures out whether this code
-    came from a partner onboarding request or a starter-coupon issuance
-    (or neither — e.g. a code created directly in the admin UI, which has
-    nothing to notify) and pushes the deactivation to Lead Gen Tool."""
-    partner_req = PartnerOnboardingRequest.objects.filter(
-        referral_code=code, status="approved"
-    ).first()
-    if partner_req:
-        _deliver_partner_deactivation_to_leadgen(partner_req)
-        if not partner_req.deactivation_delivered:
-            _log("leadgen_delivery_failed", code, actor,
-                 f"Deactivation notice to Lead Gen Tool failed for partner request ({mask_code(code.code)})")
-        return
-
-    issuance = StarterCouponIssuance.objects.filter(referral_code=code).first()
-    if issuance:
-        _deliver_coupon_deactivation_to_leadgen(issuance)
-        if not issuance.deactivation_delivered:
-            _log("leadgen_delivery_failed", code, actor,
-                 f"Deactivation notice to Lead Gen Tool failed for starter coupon ({mask_code(code.code)})")
-
 @login_required
 @require_http_methods(["POST"])
 def deactivate_code(request, code_id):
@@ -350,7 +351,7 @@ def deactivate_code(request, code_id):
         _log("deactivated", code, request.user)
 
     _sync_deactivated_code_to_wix(code, request.user)
-    _notify_leadgen_of_deactivation(code, request.user)  # NEW — was previously never called
+    _notify_leadgen_of_deactivation(code, request.user)
 
     if code.wix_sync_status == "failed":
         messages.warning(
@@ -481,13 +482,20 @@ def ops_dashboard(request):
         raise PermissionDenied("Ops access only.")
     codes = ReferralCode.objects.filter(approval_status="approved").select_related("requested_by", "approved_by")
     now = timezone.now()
+    ops_counts = {
+        "live": codes.filter(active=True).exclude(expires_at__lte=now).count(),
+        "deactivated": codes.filter(active=False).count(),
+        "expired": codes.filter(active=True, expires_at__lte=now).count(),
+    }
+
+    # Materialize so each code can carry its linked PurchaseRewardIssuance
+    # (order id, buyer) for Wix-minted reward coupons — lets Ops trace a
+    # code back to the purchase that earned it without a separate lookup.
+    live_codes = _attach_purchase_rewards(list(codes))
+
     return render(request, "referrals/ops_dashboard.html", {
-        "live_codes": codes,
-        "ops_counts": {
-            "live": codes.filter(active=True).exclude(expires_at__lte=now).count(),
-            "deactivated": codes.filter(active=False).count(),
-            "expired": codes.filter(active=True, expires_at__lte=now).count(),
-        },
+        "live_codes": live_codes,
+        "ops_counts": ops_counts,
         "is_ops": True,
     })
 
@@ -538,22 +546,38 @@ def create_partner_request(request):
 
     existing = PartnerOnboardingRequest.objects.filter(
         source_system="leadgen", external_user_id=external_user_id
-    ).first()
+    ).select_related("referral_code").first()
 
-    if existing and existing.status in ("pending", "approved"):
-        return JsonResponse({"status": existing.status, "request_id": existing.id})
+    if existing and existing.status == "pending":
+        return JsonResponse({"status": "pending", "request_id": existing.id})
 
+    # An "approved" request only stays blocking while its code is still
+    # live. Once that code is deactivated, status here never changes on its
+    # own — nothing updates PartnerOnboardingRequest.status when the linked
+    # ReferralCode is deactivated (only the code and, via the deactivation
+    # webhook, Lead Gen's own PartnerApplication row change). Without this
+    # check, a partner whose code was deactivated could never be re-queued
+    # for approval: this same unique (source_system, external_user_id) row
+    # would keep returning "approved" forever.
+    if existing and existing.status == "approved" and existing.referral_code and existing.referral_code.is_live:
+        return JsonResponse({"status": "approved", "request_id": existing.id})
+
+    # No existing request, or the previous one was rejected, or its
+    # approved code has since been deactivated — (re)queue it. update_or_create
+    # reuses the same row rather than creating a second one, since
+    # (source_system, external_user_id) is unique.
     req, _ = PartnerOnboardingRequest.objects.update_or_create(
         source_system="leadgen",
         external_user_id=external_user_id,
         defaults={
             "external_email": data["email"],
             "external_name": data.get("name", ""),
-            "application_data": data.get("application_data", {}),  # NEW
+            "application_data": data.get("application_data", {}),
             "status": "pending",
             "product": "",
             "referral_code": None,
             "callback_delivered": False,
+            "deactivation_delivered": False,
         },
     )
     return JsonResponse({"status": "queued", "request_id": req.id})
@@ -622,7 +646,6 @@ def reject_partner_request(request, request_id):
     with transaction.atomic():
         req.status = "rejected"
         req.save(update_fields=["status"])
-        # After
         _log("rejected", None, request.user, f"Partner onboarding request rejected for {mask_email(req.external_email)}")
     messages.success(request, f"Request from {req.external_email} rejected.")
     return redirect("user_dashboard")
@@ -714,12 +737,18 @@ def request_starter_coupon_api(request):
     if product not in dict(PRODUCT_CHOICES):
         return JsonResponse({"error": "invalid product"}, status=400)
 
-    # Idempotent: if this Lead Gen user already has a starter coupon, return it
-    # instead of minting a second one.
+    # Idempotent, but only while the existing coupon is still live: if this
+    # Lead Gen user already has a starter coupon AND it hasn't been
+    # deactivated/expired since, return the same one instead of minting a
+    # second one. If it's no longer live, fall through and mint a fresh
+    # coupon instead — the user has explicitly asked for a new one (via
+    # Lead Gen's "Request New Coupon" flow) after the old one was
+    # deactivated, and returning the same dead code here would make the
+    # re-request a silent no-op.
     existing = StarterCouponIssuance.objects.filter(
         source_system="leadgen", external_user_id=user_id
     ).select_related("referral_code").first()
-    if existing:
+    if existing and existing.referral_code.is_live:
         code = existing.referral_code
         return JsonResponse({
             "owner_id": user_id,
@@ -746,13 +775,25 @@ def request_starter_coupon_api(request):
             approved_at=now,
             expires_at=now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS),
         )
-        StarterCouponIssuance.objects.create(
-            source_system="leadgen",
-            external_user_id=user_id,
-            external_email=email,
-            referral_code=code,
-        )
-        _log("approved", code, system_user, f"Starter coupon auto-issued for Lead Gen user {user_id} ({mask_email(email)})")
+        if existing:
+            # Re-point the same issuance row at the new code rather than
+            # creating a second row — (source_system, external_user_id) is
+            # unique, so there can only ever be one issuance per Lead Gen
+            # user regardless of how many times their coupon is reissued.
+            existing.referral_code = code
+            existing.external_email = email
+            existing.deactivation_delivered = False
+            existing.save(update_fields=["referral_code", "external_email", "deactivation_delivered"])
+            _log("approved", code, system_user,
+                 f"Starter coupon re-issued for Lead Gen user {user_id} ({mask_email(email)}) — previous coupon was no longer live")
+        else:
+            StarterCouponIssuance.objects.create(
+                source_system="leadgen",
+                external_user_id=user_id,
+                external_email=email,
+                referral_code=code,
+            )
+            _log("approved", code, system_user, f"Starter coupon auto-issued for Lead Gen user {user_id} ({mask_email(email)})")
 
     _sync_approved_code_to_wix(code, system_user)
 
@@ -868,6 +909,7 @@ def partner_request_status_api(request):
 
     return JsonResponse({"status": req.status})
 
+
 def _deliver_partner_deactivation_to_leadgen(req):
     """Symmetric to _deliver_code_to_leadgen, but for the deactivation event."""
     import requests
@@ -902,6 +944,7 @@ def _deliver_partner_deactivation_to_leadgen(req):
                         mask_code(req.referral_code.code), e)
         req.deactivation_delivered = False
         req.save(update_fields=["deactivation_delivered"])
+
 
 def _deliver_coupon_deactivation_to_leadgen(issuance):
     """Same idea, for starter (customer) coupons issued via the Lead Gen signup flow."""
@@ -951,7 +994,7 @@ def _notify_leadgen_of_deactivation(code, actor):
         _deliver_partner_deactivation_to_leadgen(partner_req)
         if not partner_req.deactivation_delivered:
             _log("leadgen_delivery_failed", code, actor,
-                 "Deactivation notice to Lead Gen Tool failed for partner request")
+                 f"Deactivation notice to Lead Gen Tool failed for partner request ({mask_code(code.code)})")
         return
 
     issuance = StarterCouponIssuance.objects.filter(referral_code=code).first()
@@ -959,106 +1002,42 @@ def _notify_leadgen_of_deactivation(code, actor):
         _deliver_coupon_deactivation_to_leadgen(issuance)
         if not issuance.deactivation_delivered:
             _log("leadgen_delivery_failed", code, actor,
-                 "Deactivation notice to Lead Gen Tool failed for starter coupon")
-        
+                 f"Deactivation notice to Lead Gen Tool failed for starter coupon ({mask_code(code.code)})")
+
+
 # ---------------------------------------------------------------------------
 # KareerTrek / Wix integration — inbound APIs for coupons created directly
-# on Wix (not through Referral Hub's own approval flow) and for usage
-# events from purchases made on KareerTrek. Server-to-server, same
-# X-Internal-Api-Key auth as the Lead Gen integration.
+# on Wix (including the automatic purchase-reward coupon minted by the
+# "Plan ordered" Velo automation) and for usage events from purchases made
+# on KareerTrek. Server-to-server, same X-Internal-Api-Key auth as the Lead
+# Gen integration.
+#
+# NOTE: coupons are now always minted on the Wix side first (see the "Plan
+# ordered" automation). Referral Hub no longer mints reward coupons itself
+# and pushes them to Wix — the old /careertrek/purchase-reward-coupon
+# endpoint that did that has been removed since nothing calls it anymore.
+# wix_coupon_created_api below is the single inbound path for both manually
+# created Wix coupons and automatic purchase-reward coupons.
 # ---------------------------------------------------------------------------
-@csrf_exempt
-@require_http_methods(["POST"])
-def issue_purchase_reward_coupon_api(request):
-    """
-    POST /careertrek/purchase-reward-coupon
-    Called by a Wix Automation right after a plan purchase completes.
-    Auto-issues (no admin approval) a new customer-type ReferralCode as a
-    reward for the purchase, then pushes it live to Wix so the customer can
-    redeem it on a future purchase.
 
-    Idempotent on (source_system, external_order_id) via
-    PurchaseRewardIssuance, so a retried/duplicate Wix Automation run
-    doesn't mint a second reward for the same order.
-    """
-    if not _check_api_key(request):
-        return JsonResponse({"error": "unauthorized"}, status=401)
-
-    try:
-        data = json.loads(request.body)
-        user_id = str(data["user_id"])
-        order_id = str(data["order_id"])
-    except (json.JSONDecodeError, KeyError):
-        return JsonResponse({"error": "invalid payload"}, status=400)
-
-    email = data.get("email", "")
-    name = data.get("name", "")
-    product = data.get("product", "kareertrek")
-    discount_percent = int(data.get("discount_percent", DEFAULT_CUSTOMER_DISCOUNT))
-
-    if product not in dict(PRODUCT_CHOICES):
-        return JsonResponse({"error": "invalid product"}, status=400)
-
-    existing = PurchaseRewardIssuance.objects.filter(
-        source_system="wix", external_order_id=order_id
-    ).select_related("referral_code").first()
-    if existing:
-        code = existing.referral_code
-        return JsonResponse({
-            "code": code.code,
-            "discount_percent": code.discount_percent,
-            "status": "already issued",
-        })
-
-    system_user = _wix_system_user()
-
-    with transaction.atomic():
-        now = timezone.now()
-        code = ReferralCode.objects.create(
-            code_type="customer",
-            requested_by=system_user,
-            owner_name=name,
-            owner_email=email,
-            product=product,
-            discount_percent=discount_percent,
-            approval_status="approved",
-            approved_by=system_user,
-            approved_at=now,
-            expires_at=now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS),
-            origin_system="hub",
-        )
-        PurchaseRewardIssuance.objects.create(
-            source_system="wix",
-            external_user_id=user_id,
-            external_order_id=order_id,
-            external_email=email,
-            referral_code=code,
-        )
-        _log("approved", code, system_user,
-             f"Purchase-reward coupon auto-issued for order {order_id} ({mask_email(email)})")
-
-    _sync_approved_code_to_wix(code, system_user)
-
-    return JsonResponse({
-        "code": code.code,
-        "discount_percent": code.discount_percent,
-        "wix_sync_status": code.wix_sync_status,
-        "status": "issued",
-    })
-    
-    
 @csrf_exempt
 @require_http_methods(["POST"])
 def wix_coupon_created_api(request):
     """
     POST /kareertrek/coupon-created
-    Called when a coupon is created directly on Wix (e.g. as part of a
-    KareerTrek plan purchase) rather than through Referral Hub's own
-    request/approve workflow. Mirrors it into ReferralCode so it shows up
-    in the Hub's dashboards, audit log, and usage tracking.
+    Called when a coupon is created directly on Wix — either a manual coupon,
+    or the automatic purchase-reward coupon minted by the "Plan ordered" Velo
+    automation right after checkout. Mirrors it into ReferralCode so it shows
+    up in the Hub's dashboards, audit log, and usage tracking.
 
     Idempotent on wix_coupon_id: replaying the same event updates the
     existing record instead of creating a duplicate.
+
+    When order_id + user_id are included (the purchase-reward case), also
+    records a PurchaseRewardIssuance so the coupon can be looked up by
+    order/user and traced back to the purchase that earned it on the
+    dashboards, and so a retried Automation run for the same order doesn't
+    create a second linkage.
     """
     if not _check_api_key(request):
         return JsonResponse({"error": "unauthorized"}, status=401)
@@ -1074,6 +1053,20 @@ def wix_coupon_created_api(request):
     product = data.get("product", "kareertrek")
     if product not in dict(PRODUCT_CHOICES):
         return JsonResponse({"error": "invalid product"}, status=400)
+
+    order_id = str(data["order_id"]) if data.get("order_id") else ""
+    user_id = str(data["user_id"]) if data.get("user_id") else ""
+
+    # Purchase-reward idempotency: if this order already has a reward coupon
+    # on record, return it as-is instead of touching anything (covers the
+    # Velo automation firing more than once for the same "Plan ordered" event).
+    if order_id:
+        existing_issuance = PurchaseRewardIssuance.objects.filter(
+            source_system="wix", external_order_id=order_id
+        ).select_related("referral_code").first()
+        if existing_issuance:
+            code = existing_issuance.referral_code
+            return JsonResponse({"status": "already issued", "code": code.code, "coupon_id": code.id})
 
     system_user = _wix_system_user()
     existing = ReferralCode.objects.filter(wix_coupon_id=wix_coupon_id).first()
@@ -1111,10 +1104,22 @@ def wix_coupon_created_api(request):
         code.wix_last_synced_at = timezone.now()
         code.save()
 
+        if order_id and user_id and not PurchaseRewardIssuance.objects.filter(
+            source_system="wix", external_order_id=order_id
+        ).exists():
+            PurchaseRewardIssuance.objects.create(
+                source_system="wix",
+                external_user_id=user_id,
+                external_order_id=order_id,
+                external_email=data.get("owner_email", ""),
+                referral_code=code,
+            )
+
         _log(
             "wix_coupon_synced_in" if created else "wix_coupon_updated_in",
             code, system_user,
-            f"Coupon {mask_code(code.code)} {'created' if created else 'updated'} from Wix (coupon id {wix_coupon_id})",
+            f"Coupon {mask_code(code.code)} {'created' if created else 'updated'} from Wix (coupon id {wix_coupon_id})"
+            + (f", purchase reward for order {order_id}" if order_id else ""),
         )
 
     return JsonResponse({"status": "created" if created else "updated", "code": code.code, "coupon_id": code.id})
