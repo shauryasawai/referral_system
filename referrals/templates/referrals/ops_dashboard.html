@@ -4,7 +4,7 @@
 {% block body %}
 <div class="page">
 
-  <h1>Referral Codes — Ops View <span class="role-badge">Ops</span></h1>
+  <h1>{{ greeting|default:"Welcome back" }} — Referral Codes, Ops View <span class="role-badge">Ops</span></h1>
   <p class="subtext" style="margin-bottom:24px">Read-only reference of all approved codes. Codes and owner emails are shown partially masked — only the assigned recipient sees the full value.</p>
 
   {% if messages %}{% for m in messages %}<div class="alert alert-success">{{ m }}</div>{% endfor %}{% endif %}
@@ -18,37 +18,37 @@
   <div class="card">
     <div class="card-head"><h3>Approved codes</h3></div>
     <div class="table-wrap">
-    <table>
-    <tr><th>Code</th><th>Owner</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Origin</th><th>Status</th><th>Approved</th><th>Expires</th></tr>
+    <table class="compact-table">
+    <tr><th>Code</th><th>Product</th><th>Discount</th><th>Status</th><th>Dates</th></tr>
     {% for c in live_codes %}
     <tr>
       <td>
         <span class="code-chip code-masked" title="Full code visible only to the assigned recipient">{{ c.code|mask_code }}</span>
-      </td>
-      <td>
-        {{ c.owner_name|default:"—" }}<br>
-        <span class="subtext">{{ c.owner_email|mask_email }}</span>
-      </td>
-      <td>{{ c.requested_by }}</td>
-      <td>{{ c.get_product_display }}</td>
-      <td>{{ c.discount_percent }}%</td>
-      <td class="nowrap-cell">
-        {% if c.origin_system == "wix" %}
-          {% if c.purchase_reward %}
-            <span class="badge badge-wix" title="Order {{ c.purchase_reward.external_order_id }}">Wix</span>
+        <div class="subtext nowrap-cell">
+          {{ c.owner_name|default:c.requested_by }} · {{ c.owner_email|mask_email }}
+          {% if c.origin_system == "wix" %}
+            {% if c.purchase_reward %}
+              · <span class="badge badge-wix" title="Order {{ c.purchase_reward.external_order_id }}">Wix</span>
+            {% else %}
+              · <span class="badge badge-wix" title="Manual Wix coupon (not tied to a purchase)">Wix</span>
+            {% endif %}
+          {% elif c.origin_system == "leadgen" %}
+            · <span class="badge badge-leadgen" title="Requested through Lead Gen Tool (starter coupon or partner onboarding)">Lead Gen</span>
           {% else %}
-            <span class="badge badge-wix" title="Manual Wix coupon (not tied to a purchase)">Wix</span>
+            · <span class="badge badge-hub">Hub</span>
           {% endif %}
-        {% else %}
-          <span class="badge badge-hub">Hub</span>
-        {% endif %}
+        </div>
       </td>
+      <td class="nowrap-cell">{{ c.get_product_display }}</td>
+      <td class="nowrap-cell">{{ c.discount_percent }}%</td>
       <td class="nowrap-cell"><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
-      <td class="nowrap-cell">{{ c.approved_at|date:"M d, H:i" }}</td>
-      <td class="nowrap-cell">{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
+      <td class="nowrap-cell">
+        <div>App {{ c.approved_at|date:"M d, H:i" }}</div>
+        <div class="subtext">Exp {{ c.expires_at|date:"M d, Y"|default:"—" }}</div>
+      </td>
     </tr>
     {% empty %}
-    <tr class="empty-row"><td colspan="9">No approved codes yet.</td></tr>
+    <tr class="empty-row"><td colspan="5">No approved codes yet.</td></tr>
     {% endfor %}
     </table>
     </div>
@@ -62,6 +62,7 @@
   .accent-expired { border-left-color: #6c757d; }
   .badge-wix { background: #0d6efd; color: #fff; }
   .badge-hub { background: #6c757d; color: #fff; }
+  .badge-leadgen { background: #7048e8; color: #fff; }
 
   .nowrap-cell {
     white-space: nowrap;
@@ -69,6 +70,34 @@
 
   .table-wrap {
     overflow-x: auto;
+  }
+
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .card, .stat-card {
+    animation: fadeInUp 0.4s ease both;
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+  .stat-grid .stat-card:nth-child(1) { animation-delay: 0.02s; }
+  .stat-grid .stat-card:nth-child(2) { animation-delay: 0.07s; }
+  .stat-grid .stat-card:nth-child(3) { animation-delay: 0.12s; }
+  .card:hover, .stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+  }
+
+  .empty-row td {
+    text-align: center;
+    padding: 28px 12px !important;
+    color: #9aa0a6;
+    font-style: italic;
+  }
+
+  .compact-table td, .compact-table th {
+    padding: 8px 10px;
+    font-size: 13px;
   }
 </style>
 {% endblock %}

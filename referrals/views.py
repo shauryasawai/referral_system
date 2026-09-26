@@ -161,7 +161,18 @@ def _wix_system_user():
 # Partner / customer dashboard — each user sees ONLY their own codes
 # ---------------------------------------------------------------------------
 
-@login_required
+def _time_of_day_greeting():
+    """Small warmth touch, matching the same one added to Lead Gen's
+    dashboard — 'Good morning/afternoon/evening' instead of a static
+    'Welcome back' regardless of when someone actually opens the app."""
+    hour = timezone.localtime().hour
+    if hour < 12:
+        return "Good morning"
+    if hour < 18:
+        return "Good afternoon"
+    return "Good evening"
+
+
 def user_dashboard(request):
     # Ops-only members don't request codes — their job is monitoring, not generating.
     # Send them straight to the Ops dashboard instead of the request-a-code page.
@@ -196,6 +207,7 @@ def user_dashboard(request):
         "is_ops": _in_group(request.user, "Ops"),
         "is_partner": _in_group(request.user, "ChannelPartner") and not request.user.is_staff,
         "has_no_products": not allowed_products,
+        "greeting": _time_of_day_greeting(),
     }
 
     if request.user.is_staff:
@@ -279,7 +291,23 @@ def edit_code(request, code_id):
     including renaming the code itself and adjusting its expiry. Deactivated codes can no
     longer be edited by anyone — the only path forward is requesting a fresh code."""
     code = get_object_or_404(ReferralCode, id=code_id)
-    is_owner = code.requested_by_id == request.user.id
+
+    # requested_by is NOT always the code's real owner: approve_partner_request
+    # sets it to the admin who clicked Approve, not the external partner
+    # (who isn't a Referral Hub user at all — they only exist as a
+    # PartnerOnboardingRequest row). Without this check, that admin would be
+    # treated as the "owner" of every partner code they've ever approved,
+    # and see it unmasked here indefinitely — exactly backwards from the
+    # masking rule this page is supposed to enforce for staff viewing
+    # someone else's code. A genuinely self-requested code (a customer or
+    # Channel Partner using their own dashboard) never has a
+    # PartnerOnboardingRequest linked to it, so this only changes the
+    # outcome for the admin-approved case.
+    is_owner = (
+        code.requested_by_id == request.user.id
+        and not PartnerOnboardingRequest.objects.filter(referral_code=code).exists()
+    )
+
     editable = code.approval_status != "approved" or code.active  # blocks edits on deactivated codes
     if not editable:
         raise PermissionDenied("This code is deactivated and can no longer be edited. Request a new code instead.")
@@ -333,7 +361,10 @@ def edit_code(request, code_id):
             allow_code_edit=request.user.is_staff,
         )
 
-    return render(request, "referrals/edit_code.html", {"code": code, "form": form, "is_ops": _in_group(request.user, "Ops")})
+    return render(request, "referrals/edit_code.html", {
+        "code": code, "form": form, "is_owner": is_owner,
+        "is_ops": _in_group(request.user, "Ops"),
+    })
 
 
 @login_required
@@ -497,6 +528,7 @@ def ops_dashboard(request):
         "live_codes": live_codes,
         "ops_counts": ops_counts,
         "is_ops": True,
+        "greeting": _time_of_day_greeting(),
     })
 
 
@@ -616,6 +648,12 @@ def approve_partner_request(request, request_id):
             approved_by=request.user,
             approved_at=now,
             expires_at=now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS),
+            # This code exists because of a Lead Gen partner-onboarding
+            # application, not because someone used Referral Hub directly —
+            # requested_by is only the approving admin (see edit_code's
+            # is_owner fix), so origin_system is the only place this
+            # distinction is actually recorded and shown on the dashboards.
+            origin_system="leadgen",
         )
         req.status = "approved"
         req.product = product
@@ -774,6 +812,7 @@ def request_starter_coupon_api(request):
             approved_by=system_user,
             approved_at=now,
             expires_at=now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS),
+            origin_system="leadgen",
         )
         if existing:
             # Re-point the same issuance row at the new code rather than
@@ -864,6 +903,7 @@ def regenerate_starter_coupon_api(request):
             approved_by=system_user,
             approved_at=now,
             expires_at=now + timedelta(days=365 * DEFAULT_CODE_VALIDITY_YEARS),
+            origin_system="leadgen",
         )
         if existing:
             existing.referral_code = code

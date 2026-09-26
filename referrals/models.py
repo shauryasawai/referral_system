@@ -44,8 +44,19 @@ AUDIT_ACTION_CHOICES = [
     ("wix_coupon_updated_in", "Coupon Updated From Wix"),
     ("leadgen_delivery_failed", "Lead Gen Delivery Failed"),
 ]
+
+# Which system a ReferralCode actually originated from — distinct from
+# code_type (partner vs customer) and from where it's *hosted*/synced
+# (Wix). A code can be requested directly on Referral Hub (a customer or
+# Channel Partner using user_dashboard themselves), via Lead Gen Tool (a
+# starter-coupon signup or a partner-onboarding application, both arriving
+# through inbound API calls with no Referral Hub login involved), or minted
+# directly on Wix (a manual coupon, or the automatic purchase-reward coupon
+# from the "Plan ordered" automation). All three are shown as distinct
+# badges on the admin/Ops dashboards.
 ORIGIN_SYSTEM_CHOICES = [
     ("hub", "Referral Hub"),
+    ("leadgen", "Lead Gen Tool"),
     ("wix", "Wix / KareerTrek"),
 ]
 

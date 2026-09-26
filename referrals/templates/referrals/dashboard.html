@@ -4,7 +4,7 @@
 {% block body %}
 <div class="page">
 
-  <h1>Welcome back, {{ request.user.username }}
+  <h1>{{ greeting|default:"Welcome back" }}, {{ request.user.username }}
     {% if request.user.is_staff %}<span class="role-badge">Admin</span>
     {% elif is_ops %}<span class="role-badge">Ops</span>
     {% elif is_partner %}<span class="role-badge">Channel Partner</span>
@@ -36,7 +36,6 @@
         <button type="submit">Request code</button>
       </form>
       {% if form.product.errors %}<div class="alert alert-error" style="margin-top:10px">{{ form.product.errors.0 }}</div>{% endif %}
-      <p class="subtext">Your code is generated instantly but stays <strong>pending</strong> until an admin approves it. Once approved, it goes live for {{ default_validity_years|default:"3" }} years (unless an admin adjusts the expiry) and is usable at checkout. Deactivation is permanent — if a code is deactivated, request a new one here.</p>
     {% endif %}
   </div>
 
@@ -46,7 +45,7 @@
     <div class="card-head"><h3>My requests</h3></div>
     <div class="table-wrap">
     <table>
-    <tr><th>Code</th><th>Product</th><th>Discount</th><th>Status</th><th>Requested</th><th>Expires</th><th></th></tr>
+    <tr><th>Code</th><th>Product</th><th>Discount</th><th>Status</th><th>Dates</th><th></th></tr>
     {% for c in my_codes %}
     <tr>
       <td>
@@ -55,11 +54,13 @@
           <button type="button" class="copy-btn" data-code="{{ c.code }}" onclick="copyCode(this)">Copy</button>
         </div>
       </td>
-      <td>{{ c.get_product_display }}</td>
-      <td>{{ c.discount_percent }}%</td>
+      <td class="nowrap-cell">{{ c.get_product_display }}</td>
+      <td class="nowrap-cell">{{ c.discount_percent }}%</td>
       <td class="nowrap-cell"><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
-      <td class="nowrap-cell">{{ c.created_at|date:"M d, H:i" }}</td>
-      <td class="nowrap-cell">{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
+      <td class="nowrap-cell">
+        <div>Req {{ c.created_at|date:"M d, H:i" }}</div>
+        <div class="subtext">Exp {{ c.expires_at|date:"M d, Y"|default:"—" }}</div>
+      </td>
       <td>
         <div class="btn-row">
           {% if c.approval_status == "pending" %}
@@ -75,7 +76,7 @@
       </td>
     </tr>
     {% empty %}
-    <tr class="empty-row"><td colspan="7">No requests yet — request your first code above.</td></tr>
+    <tr class="empty-row"><td colspan="6">No requests yet — request your first code above.</td></tr>
     {% endfor %}
     </table>
     </div>
@@ -98,7 +99,6 @@
       <h3>Pending partner requests</h3>
       {% if partner_request_count %}<span class="badge badge-pending">{{ partner_request_count }}</span>{% endif %}
     </div>
-    <div class="panel-note">New signups from Lead Gen Tool waiting to be approved as channel partners. Pick a product to generate their code. Contact details are shown partially — full details are only delivered to the applicant themselves.</div>
     <div class="table-wrap">
     <table>
     <tr><th>Name</th><th>Email</th><th>Signed up</th><th>Submitted details</th><th>Product</th><th>Action</th></tr>
@@ -183,51 +183,54 @@
        order/buyer that earned them, via PurchaseRewardIssuance. -->
   <div class="card">
     <div class="card-head"><h3>All coupons</h3></div>
-    <div class="panel-note">Every code from every user, shown partially masked. Only the assigned recipient (via their own dashboard or the Lead Gen delivery) sees the full code.</div>
     <div class="table-wrap">
-    <table>
-    <tr><th>Code</th><th>Requested by</th><th>Product</th><th>Discount</th><th>Origin</th><th>Status</th><th>Requested</th><th>Expires</th><th>Action</th></tr>
+    <table class="compact-table">
+    <tr><th>Code</th><th>Product</th><th>Discount</th><th>Status</th><th>Dates</th><th>Action</th></tr>
     {% for c in all_codes_admin %}
     <tr>
       <td>
         <span class="code-chip code-masked" title="Full code visible only to the assigned recipient">{{ c.code|mask_code }}</span>
-      </td>
-      <td>{{ c.requested_by }}</td>
-      <td>{{ c.get_product_display }}</td>
-      <td>{{ c.discount_percent }}%</td>
-      <td class="nowrap-cell">
-        {% if c.origin_system == "wix" %}
-          {% if c.purchase_reward %}
-            <span class="badge badge-wix" title="Order {{ c.purchase_reward.external_order_id }} · {{ c.purchase_reward.external_email|mask_email }}">Wix</span>
+        <div class="subtext nowrap-cell">
+          by {{ c.requested_by }}
+          {% if c.origin_system == "wix" %}
+            {% if c.purchase_reward %}
+              · <span class="badge badge-wix" title="Order {{ c.purchase_reward.external_order_id }} · {{ c.purchase_reward.external_email|mask_email }}">Wix</span>
+            {% else %}
+              · <span class="badge badge-wix" title="Manual Wix coupon (not tied to a purchase)">Wix</span>
+            {% endif %}
+          {% elif c.origin_system == "leadgen" %}
+            · <span class="badge badge-leadgen" title="Requested through Lead Gen Tool (starter coupon or partner onboarding) — requested_by shows whichever admin/service account created the row on this side, not the actual recipient">Lead Gen</span>
           {% else %}
-            <span class="badge badge-wix" title="Manual Wix coupon (not tied to a purchase)">Wix</span>
+            · <span class="badge badge-hub">Hub</span>
           {% endif %}
-        {% else %}
-          <span class="badge badge-hub">Hub</span>
-        {% endif %}
+        </div>
       </td>
+      <td class="nowrap-cell">{{ c.get_product_display }}</td>
+      <td class="nowrap-cell">{{ c.discount_percent }}%</td>
       <td class="nowrap-cell"><span class="badge badge-{{ c.display_status }}">{{ c.display_status_label }}</span></td>
-      <td class="nowrap-cell">{{ c.created_at|date:"M d, H:i" }}</td>
-      <td class="nowrap-cell">{{ c.expires_at|date:"M d, Y"|default:"—" }}</td>
+      <td class="nowrap-cell">
+        <div>Req {{ c.created_at|date:"M d, H:i" }}</div>
+        <div class="subtext">Exp {{ c.expires_at|date:"M d, Y"|default:"—" }}</div>
+      </td>
       <td>
-        <div class="btn-row">
-          {% if c.approval_status == "pending" %}
-            <form action="{% url 'approve_code' c.id %}" method="post" class="inline-form">{% csrf_token %}<button type="submit" class="btn-approve">Approve</button></form>
-            <form action="{% url 'reject_code' c.id %}" method="post" class="inline-form">{% csrf_token %}<button type="submit" class="btn-reject">Reject</button></form>
-            <a href="{% url 'edit_code' c.id %}">Edit</a>
-          {% elif c.approval_status == "approved" and c.active %}
-            <a href="{% url 'edit_code' c.id %}">Edit</a>
-            <form action="{% url 'deactivate_code' c.id %}" method="post" class="inline-form" onsubmit="return confirm('Deactivate this code permanently?');">
-              {% csrf_token %}
-              <button type="submit" class="btn-warn" style="padding:5px 10px;font-size:12px">Deactivate</button>
-            </form>
-          {% endif %}
-          <form action="{% url 'delete_code' c.id %}" method="post" class="inline-form" onsubmit="return confirm('Permanently delete this code? This cannot be undone.');">{% csrf_token %}<button type="submit" class="btn-ghost" style="padding:5px 10px;font-size:12px">Delete</button></form>
+        <div class="action-menu-wrap">
+          <button type="button" class="action-menu-btn" title="Actions">&#8942;</button>
+          <div class="action-menu">
+            {% if c.approval_status == "pending" %}
+              <form action="{% url 'approve_code' c.id %}" method="post">{% csrf_token %}<button type="submit">Approve</button></form>
+              <form action="{% url 'reject_code' c.id %}" method="post">{% csrf_token %}<button type="submit" class="menu-danger">Reject</button></form>
+              <a href="{% url 'edit_code' c.id %}">Edit</a>
+            {% elif c.approval_status == "approved" and c.active %}
+              <a href="{% url 'edit_code' c.id %}">Edit</a>
+              <form action="{% url 'deactivate_code' c.id %}" method="post" onsubmit="return confirm('Deactivate this code permanently?');">{% csrf_token %}<button type="submit" class="menu-warn">Deactivate</button></form>
+            {% endif %}
+            <form action="{% url 'delete_code' c.id %}" method="post" onsubmit="return confirm('Permanently delete this code? This cannot be undone.');">{% csrf_token %}<button type="submit" class="menu-danger">Delete</button></form>
+          </div>
         </div>
       </td>
     </tr>
     {% empty %}
-    <tr class="empty-row"><td colspan="9">No requests yet — request your first code above.</td></tr>
+    <tr class="empty-row"><td colspan="6">No requests yet — request your first code above.</td></tr>
     {% endfor %}
     </table>
     </div>
@@ -246,6 +249,7 @@
   .accent-expired { border-left-color: #6c757d; }
   .badge-wix { background: #0d6efd; color: #fff; }
   .badge-hub { background: #6c757d; color: #fff; }
+  .badge-leadgen { background: #7048e8; color: #fff; }
 
   /* Force the action column into a compact, wrapping row of buttons
      rather than stacking each form/link on its own full line — <form>
@@ -280,5 +284,111 @@
   .table-wrap {
     overflow-x: auto;
   }
+
+  /* ── A little life on load, matching the same touch added to Lead
+       Gen's dashboard — purely additive, doesn't depend on base.html. ── */
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .card, .stat-card {
+    animation: fadeInUp 0.4s ease both;
+  }
+  .stat-grid .stat-card:nth-child(1) { animation-delay: 0.02s; }
+  .stat-grid .stat-card:nth-child(2) { animation-delay: 0.07s; }
+  .stat-grid .stat-card:nth-child(3) { animation-delay: 0.12s; }
+  .stat-grid .stat-card:nth-child(4) { animation-delay: 0.17s; }
+  .stat-grid .stat-card:nth-child(5) { animation-delay: 0.22s; }
+
+  /* Subtle lift on hover so the dashboard feels a bit more responsive to
+     the cursor, without needing to know what base.html already does. */
+  .card, .stat-card {
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+  .card:hover, .stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+  }
+
+  /* Give the informational banners a touch more visual structure than a
+     plain line of muted text. */
+  .panel-note {
+    position: relative;
+    padding-left: 30px;
+    border-left: 3px solid #90b4fe;
+    background: #f4f7ff;
+    border-radius: 6px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    padding-right: 10px;
+  }
+  .panel-note::before {
+    content: "ⓘ";
+    position: absolute;
+    left: 9px;
+    top: 8px;
+    color: #4c6ef5;
+    font-weight: 700;
+    font-size: 13px;
+  }
+
+  /* A friendlier "nothing here yet" row instead of plain muted text
+     jammed against the table border. */
+  .empty-row td {
+    text-align: center;
+    padding: 28px 12px !important;
+    color: #9aa0a6;
+    font-style: italic;
+  }
+
+  /* Tighter cell padding/font for the admin tables specifically — helps
+     several columns fit without horizontal scroll on ordinary screens. */
+  .compact-table td, .compact-table th {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  /* Collapses Approve/Reject/Edit/Deactivate/Delete into one small
+     dropdown per row instead of a row of separate buttons, which was the
+     single biggest thing forcing this table into horizontal scroll. */
+  .action-menu-wrap { position: relative; display: inline-block; }
+  .action-menu-btn {
+    background: transparent; border: 1px solid #dfe3e8; border-radius: 6px;
+    width: 30px; height: 30px; cursor: pointer; font-size: 16px; color: #495057;
+    display: inline-flex; align-items: center; justify-content: center;
+    line-height: 1;
+  }
+  .action-menu-btn:hover { background: #f1f3f9; }
+  .action-menu {
+    display: none;
+    position: absolute; right: 0; top: calc(100% + 4px);
+    background: #fff; border: 1px solid #e2e6ea; border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.14);
+    min-width: 150px; z-index: 20; padding: 6px;
+  }
+  .action-menu.open { display: block; }
+  .action-menu form, .action-menu a { display: block; width: 100%; margin: 0; }
+  .action-menu button, .action-menu a {
+    display: block; width: 100%; text-align: left;
+    padding: 7px 10px; border-radius: 6px; border: none; background: none;
+    font-size: 13px; cursor: pointer; text-decoration: none; color: #212529;
+  }
+  .action-menu button:hover, .action-menu a:hover { background: #f1f3f9; }
+  .action-menu .menu-danger { color: #c92a2a; }
+  .action-menu .menu-warn { color: #a15c00; }
 </style>
+
+<script>
+  document.addEventListener('click', function (e) {
+    var toggle = e.target.closest('.action-menu-btn');
+    document.querySelectorAll('.action-menu.open').forEach(function (menu) {
+      if (!toggle || menu !== toggle.parentElement.querySelector('.action-menu')) {
+        menu.classList.remove('open');
+      }
+    });
+    if (toggle) {
+      toggle.parentElement.querySelector('.action-menu').classList.toggle('open');
+    }
+  });
+</script>
 {% endblock %}
