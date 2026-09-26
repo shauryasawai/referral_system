@@ -989,7 +989,9 @@ def partner_request_api(request):
 @csrf_exempt
 @require_http_methods(["GET"])
 def partner_request_status_api(request):
-    """GET /referral/partner-request/status?user_id=..."""
+    """GET /referral/partner-request/status?user_id=... — used by Lead Gen
+    to (re)sync partner application state, e.g. if a decision or
+    deactivation webhook was missed or the user hits refresh."""
     if not _check_api_key(request):
         return JsonResponse({"error": "unauthorized"}, status=401)
 
@@ -997,14 +999,31 @@ def partner_request_status_api(request):
     if not user_id:
         return JsonResponse({"error": "user_id required"}, status=400)
 
-    req = PartnerOnboardingRequest.objects.filter(
+    req = PartnerOnboardingRequest.objects.select_related("referral_code").filter(
         source_system="leadgen", external_user_id=user_id
     ).order_by("-created_at").first()
 
     if not req:
         return JsonResponse({"error": "not found"}, status=404)
 
-    return JsonResponse({"status": req.status})
+    # req.status only ever moves pending -> approved/rejected — nothing
+    # resets it when the underlying code is later deactivated (delivered
+    # separately, via _deliver_partner_deactivation_to_leadgen) or deleted
+    # (SET_NULLs req.referral_code without touching req.status at all). So
+    # reporting req.status directly would say "approved" forever even
+    # after the code stopped being valid. Check the code's actual
+    # liveness instead, same fix as my_coupon_api's equivalent bug.
+    if req.status == "approved":
+        code = req.referral_code
+        reported_status = "approved" if (code is not None and code.is_live) else "deactivated"
+    else:
+        reported_status = req.status
+
+    response = {"status": reported_status}
+    if req.referral_code is not None:
+        response["code"] = req.referral_code.code
+        response["discount_percent"] = req.referral_code.discount_percent
+    return JsonResponse(response)
 
 
 def _deliver_partner_deactivation_to_leadgen(req):
