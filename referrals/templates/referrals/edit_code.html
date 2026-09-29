@@ -1,12 +1,12 @@
 {% extends "referrals/base.html" %}
-{% block title %}Edit {{ code.code }} — Referral Hub{% endblock %}
+{% block title %}Edit Code — Referral Hub{% endblock %}
 {% block body %}
 <div class="page">
 
   <h1>Edit Code</h1>
   <p class="subtext" style="margin-bottom:24px">
     {% if request.user.is_staff %}
-      As an admin, you can rename the code, adjust the discount, and change its expiry date.
+      As an admin, you can adjust the discount and change its expiry date.
     {% else %}
       You can adjust the discount while this code is still pending. Once approved, only an admin can make changes.
     {% endif %}
@@ -15,13 +15,6 @@
   <div class="card">
     <form method="post" class="form-stack">
       {% csrf_token %}
-
-      <div class="form-row">
-        <label for="{{ form.code.id_for_label }}">Code</label>
-        {{ form.code }}
-        {% if form.code.errors %}<div class="alert alert-error">{{ form.code.errors.0 }}</div>{% endif %}
-        {% if not request.user.is_staff %}<p class="subtext">Only an admin can rename a code.</p>{% endif %}
-      </div>
 
       <div class="form-row">
         <label for="{{ form.discount_percent.id_for_label }}">Discount %</label>
