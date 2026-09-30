@@ -665,12 +665,14 @@ def approve_partner_request(request, request_id):
     _sync_approved_code_to_wix(code, request.user)
     _deliver_code_to_leadgen(req)
 
+    masked = mask_code(code.code)
+
     if code.wix_sync_status == "failed":
-        messages.warning(request, f"{code.code} approved, but Wix sync failed: {code.wix_sync_error}")
+        messages.warning(request, f"{masked} approved, but Wix sync failed. Check the audit log for details.")
     elif not req.callback_delivered:
-        messages.warning(request, f"{code.code} approved, but delivering it to Lead Gen Tool failed — retry from the table below.")
+        messages.warning(request, f"{masked} approved, but delivering it to Lead Gen Tool failed. It will be retried automatically.")
     else:
-        messages.success(request, f"{code.code} approved and sent to {req.external_email}.")
+        messages.success(request, f"{masked} approved and sent to {mask_email(req.external_email)}.")
 
     return redirect("user_dashboard")
 
